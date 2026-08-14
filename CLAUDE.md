@@ -5,7 +5,7 @@ Year-agnostic scouting app for an FRC team. Currently in the **specification pha
 ## Read these before doing anything
 
 - `docs/spec/frc-scouting-app-spec.md` — the living specification. Single source of truth for all requirements and decisions.
-- `docs/spec/COLLABORATION.md` — process rules. **Sections 2, 3 and 10 are binding.** Read them.
+- `docs/spec/COLLABORATION.md` — process rules. **Sections 2, 3, 10 and 11 are binding.** Read them.
 
 ## Non-negotiables
 
@@ -16,6 +16,14 @@ Year-agnostic scouting app for an FRC team. Currently in the **specification pha
 5. **Never touch the production Supabase project.** Development work uses the dev project only.
 6. **Migrations live in the repo** and are applied by CLI. Never hand-edit a schema in the Supabase dashboard.
 7. **Secrets stay in server environment variables.** Never in the client, never committed.
+
+## Session workflow
+
+Single working copy on `master` — no worktree copies. Every change is made in the repo itself on a branch. Full detail in `COLLABORATION.md` section 11.
+
+1. **Start of a session.** When I give you this chat's requirements, ask me to open a new branch before editing anything (e.g. `spec/<topic>` or `feat/<thing>`).
+2. **During the chat.** If we discuss a new feature, decision, or gotcha that isn't written down yet, end your answer by asking whether to add it to `docs/spec/frc-scouting-app-spec.md`.
+3. **End of the session.** When I say we're finished, push the branch and open a merge request into `master` — don't merge it yourself unless I say so. (Needs a git remote; none is configured yet.)
 
 ## Communication
 

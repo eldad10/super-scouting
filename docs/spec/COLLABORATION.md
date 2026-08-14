@@ -2,7 +2,7 @@
 
 **Purpose:** hand this file to Claude at the start of every session, alongside `frc-scouting-app-spec.md`. It tells Claude how to behave, tells you how to answer efficiently, and defines the rules for the build phase. It exists to stop us re-negotiating process every time and to keep token usage low across what will be a long project.
 
-**Version:** 1.1 · **Created:** 2026-08-12 · **Updated:** 2026-08-12 (added Claude Code section)
+**Version:** 1.2 · **Created:** 2026-08-12 · **Updated:** 2026-08-14 (added section 11: branch-per-chat workflow; `nice` shorthand in section 3)
 
 ---
 
@@ -274,3 +274,16 @@ Don't blanket-approve everything on day one. Let it ask, and approve patterns as
 | Session opener prompt (section 4) | Shorter: "Read docs/spec/frc-scouting-app-spec.md topics 7 and 8. Ask me your open questions, batched, most-blocking first." |
 | Ask for a diff file (section 6) | Use the visual diff review or `git diff`. |
 | Everything in sections 2, 3, 5, 7, 8, 9 | Unchanged. |
+
+---
+
+## 11. Session workflow (branch per chat)
+
+How we run each working session in this repo. It supersedes the worktree setup — **there is one working copy, on `master`; every change is made in the repo itself on a branch, never on a copy.**
+
+1. **Start.** I open a session by giving you the requirements or topics for this chat. Before you edit anything, ask me to open a new branch for the work (named for the topic, e.g. `spec/offline-sync` or `feat/form-builder`). All of this chat's commits go on that branch.
+2. **During.** When we discuss a new feature, decision, or gotcha that isn't captured in the spec, finish your answer by asking whether to add it to `frc-scouting-app-spec.md`. Don't silently add it, and don't silently drop it.
+3. **End.** When I say we're finished, push the branch and open a merge request into `master`. Don't merge it yourself unless I tell you to; I review the MR, then it merges.
+4. **One copy.** Never create a second checkout/worktree of the spec. If you ever find edits landing in a duplicate path, stop and consolidate onto `master`.
+
+*Step 3 needs a git remote (e.g. GitHub) — none is configured yet; set one up before the first "we're finished".*
