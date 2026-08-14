@@ -27,7 +27,7 @@ Year-agnostic scouting app for an FRC team. Currently in the **specification pha
 
 ## How I answer spec questions
 
-Shorthand, defined in `COLLABORATION.md` section 3. Summary: `Q3.1 A` = pick option A · `y`/`n` = yes/no · `?` = explain first · `you pick` = use your recommendation and log it · `later` = park it · `skip` = out of scope.
+Shorthand, defined in `COLLABORATION.md` section 3. Summary: `Q3.1 A` = pick option A · `y`/`n` = yes/no · `?` = explain first · `you pick` = use your recommendation and log it · `later` = park it · `skip` = out of scope · `nice` = add to the nice-to-have list (spec §24).
 
 ## When a spec topic closes
 

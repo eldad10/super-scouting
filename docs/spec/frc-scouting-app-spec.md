@@ -1,7 +1,7 @@
 # FRC Scouting Platform — Design Specification (Living Document)
 
-**Status:** DRAFT v0.5 — spec unchanged since v0.4; process files updated for Claude Code
-**Last updated:** 2026-08-12
+**Status:** DRAFT v0.6 — core architecture forks decided (storage, versioning, offline stats, stack, access model, language). Topics remain OPEN pending their sub-questions.
+**Last updated:** 2026-08-14
 **Owner:** (your name / team number)
 **Destination:** this document, once all topics are CLOSED, becomes the input spec for Claude Code to generate an implementation plan.
 
@@ -63,9 +63,11 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 - **Offline capable**: at a venue with no internet the app loads existing data, allows changes, and syncs when connectivity returns.
 - **Responsive**: must look and work well on both phone and desktop.
 - Database: **Supabase**.
-- **Live/reactive**: any action is reflected immediately — no manual refresh (except while offline).
+- **Optimistic local UI**: a user's own action appears instantly on their own device with no manual refresh (except while offline). *(confirmed 2026-08-14)*
+- **Cross-device live push** (another device's changes appearing without a refresh) is **deferred to nice-to-have** — see topic 8 and §24 (Q15.1).
 - Deployment: **Vercel** for both client and server.
 - Features to include: team search, form management, ranking, statistics (details per topic below).
+- **Single-team install.** Built only for our team; multi-tenant/multi-org is out of scope (Q1.4). *(confirmed 2026-08-14)*
 
 ### 1.2 Proposed decisions
 
@@ -150,6 +152,9 @@ You said "year-agnostic", which is right — but there is a set of concepts that
 - Forms are created, edited and deleted from inside the app by an admin.
 - A form represents the game for a given year and is linked to competitions.
 - Form fields are the targets that charts and statistics point at.
+- **Storage model: Option A — one `scouting_entries` table with a JSONB payload** (Q3.1). Per-form-version SQL views flatten the JSONB into typed columns for analytics; validators and casts are **generated from the field definitions**, not hand-written per form. *(confirmed 2026-08-14)*
+- **Immutable form versioning** (Q3.2). A new version is created only by *structural* changes — adding, removing/deprecating, or retyping a field. Editing a field's **label** or **range/min-max** happens in place and does **not** create a version; a range change applies to new entries only and **never retroactively invalidates data already collected**. Field `key`s are permanent. *(confirmed 2026-08-14)*
+- **Semantic field metadata captured at field-creation time** (Q3.9). `description`, `unit`, `phase` and `direction` are **required** per field; `category`, `expected_range`, `include_in_ai_context` are optional. It cannot be backfilled and it drives the generated validators/views, chart labels and default sort (and is the LLM data dictionary later). *(confirmed 2026-08-14)*
 
 ### 3.2 The three ways to build this
 
@@ -349,6 +354,7 @@ This is where 95% of the app's actual usage happens: a student standing in a lou
 
 - Works fully with no internet: loads existing data, allows changes.
 - When internet returns, changes upload.
+- **Statistics and rankings compute on-device while offline** (Q7.4). The metric engine runs in the browser from the shared `packages/shared` engine — the *same code* as server-side, so results cannot diverge. Metric calculations are expected to stay simple. *(confirmed 2026-08-14)*
 
 ### 7.2 The thing you must know about FRC venues **[RAISED BY ME]**
 
@@ -385,7 +391,8 @@ Consequences we should decide on:
 
 ### 8.1 Confirmed requirements
 
-- Every action is reflected immediately in the database and in the UI without a manual refresh, except when offline.
+- **Optimistic local UI** — a user's own action appears instantly on their own device, no manual refresh (except while offline). *(confirmed 2026-08-14)*
+- **Cross-device live push is deferred to nice-to-have** (Q15.1, §24). Online devices see others' changes on the normal refresh triggers — re-querying on screen entry, pull-to-refresh, a manual refresh, and re-sync on reconnect — with optional lightweight polling on specific live screens. Needing a full app restart to see changes is a caching bug to design out (PWA: cache the shell, network-first for data).
 
 ### 8.2 Proposed decisions
 
@@ -593,6 +600,10 @@ Manually typing 40 team numbers and 100 matches into an app at 8am on competitio
 - One repository, separate client and server projects, deployed as separate services.
 - Supabase as the database.
 - Deployment on Vercel.
+- **TypeScript everywhere** (Q15.2, Q15.4). Client: **React + Vite** PWA. Server: **Node + Hono**. A shared `packages/shared` holds the metric engine, form-definition model and Zod schemas so the offline (browser) and server code paths are literally the same code. *(confirmed 2026-08-14)*
+- **All traffic goes through the server API** (Q15.1) — no direct client→Supabase access on the hot path. Load is low, and this is clean now that cross-device realtime is deferred (topic 8, §24). *(confirmed 2026-08-14)*
+- **Transport-agnostic use-case layer** (Q15.8): every operation is a named, typed, described use case (Zod in/out) in `packages/shared` / `server/core`; HTTP is the transport now, MCP mappable mechanically later. *(confirmed 2026-08-14)*
+- **Dynamic-form validation is generated at runtime from the field definitions.** Hand-written Zod covers only the fixed skeleton and the use-case tool inputs/outputs; a new season's form needs no code change. *(confirmed 2026-08-14)*
 
 ### 15.2 Proposed decisions
 
@@ -665,6 +676,7 @@ The pay-off is that MCP support becomes a mechanical mapping — a Zod schema co
 ### 16.1 Confirmed requirements
 
 - Must look good and work well on both phone and computer screens.
+- **App chrome is English and LTR** (kept simple); **form content is Hebrew** — labels and free-text notes (Q16.2). Full-app RTL is **not** required, but every text node that can hold Hebrew (form labels, notes, and their appearance on chart axes, tables and team cards) must be bidi-correct (`dir="auto"`). Built in from the start, not retrofitted. *(confirmed 2026-08-14)*
 
 ### 16.2 Proposed decisions
 
@@ -869,12 +881,23 @@ Decisions get recorded here as topics close, so Claude Code (and future you) can
 | Date | Topic | Decision | Rationale |
 |---|---|---|---|
 | 2026-08-12 | 20 | **AI/MCP is setup only.** Build the two non-deferrable prerequisites (semantic field metadata, transport-agnostic use-case layer) in phase 1. No MCP endpoint, no LLM calls, no AI UI. Phases 5–6 deferred. | Keeps phase 1 small while ensuring the only expensive-to-retrofit pieces exist. Everything deferred is purely additive. |
+| 2026-08-14 | 3 | **Storage = Option A (JSONB payload) with generated per-version views.** | Data volume is tiny for Postgres, so Option B's speed edge is irrelevant, while its costs (runtime DDL, per-table RLS, offline schema-mirroring, and losing multi-season history if old tables are dropped) are exactly what breaks at a venue. A gives B's query ergonomics via generated views without the risk, and is far easier to expose to an LLM (one stable shape + field dictionary). |
+| 2026-08-14 | 3 | **Immutable form versioning**, but label and range edits are in-place (not a new version); range edits never invalidate existing data; keys permanent. | Preserves interpretability of historical entries while keeping the common, low-risk edits cheap during build season. |
+| 2026-08-14 | 3 | **Semantic field metadata captured at creation; `description`/`unit`/`phase`/`direction` required.** | Impossible to backfill; drives generated validators/views and chart labels now, and is the LLM data dictionary later. Requiring the core four ensures they get filled in. |
+| 2026-08-14 | 7 | **Offline statistics: yes — metric engine runs in the browser too.** | Ranking teams offline is the most valuable moment of an event and venue connectivity is ~zero. Feasible because the shared TS engine is the same code online and off. |
+| 2026-08-14 | 1 | **Single-team install; multi-tenant out of scope.** | Simplest; retrofitting multi-tenancy touches every table and policy but isn't needed. |
+| 2026-08-14 | 16 | **English LTR app chrome; Hebrew bidi-aware form content.** | Avoids full-app RTL cost while correctly rendering Hebrew labels/notes wherever they appear. Built in, not retrofitted. |
+| 2026-08-14 | 15 | **TypeScript everywhere (React+Vite client, Node+Hono server, shared engine); all traffic through the server API; transport-agnostic use-case layer; runtime-generated form validation.** | One language lets the offline metric engine be written once and shared, avoiding drift on the most correctness-critical code; Zod→JSON Schema makes MCP a mechanical mapping. All-through-server is a clean single control point once cross-device realtime is deferred. |
+| 2026-08-14 | 8 / 15 | **Cross-device live push deferred to nice-to-have; optimistic local UI kept.** | Removes the one thing that fought the all-through-server model and the Vercel serverless constraint; local-first UX plus refresh triggers cover the real need. |
+| 2026-08-14 | 14 | **External API import (TBA/FRC) → nice-to-have.** | Wanted but not now; defers dependent scouter-assignment and result-validation features. |
 
 ---
 
 ## 22. Open questions index
 
 Quick reference for what's still unanswered. Answered questions get struck through and moved into the relevant section as a confirmed requirement.
+
+**Closed 2026-08-14:** Q1.4, Q3.1, Q3.2, Q3.9, Q7.4, Q15.1, Q15.2, Q15.4, Q15.8, Q16.2 → confirmed requirements. Q14.1 → §24 nice-to-have.
 
 - **Topic 1:** Q1.1 – Q1.6
 - **Topic 2:** Q2.1 – Q2.7
@@ -899,13 +922,15 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 
 ### Questions I'd like answered first, because they block the most work
 
-1. **Q3.1** — JSONB vs. real tables per form. Everything downstream depends on it, and it now also affects how safely the data can be exposed to an LLM.
-2. **Q3.9** — Semantic field metadata as part of every field. The one AI prerequisite that must land in phase 1, because it can never be backfilled.
-3. **Q15.8** — The transport-agnostic use-case service layer. The other AI prerequisite that must land in phase 1.
-4. **Q7.4** — Must statistics work offline? This decides whether the metric engine is written once (SQL) or twice (SQL + TypeScript).
-5. **Q16.2** — Hebrew/RTL support? Cheap now, expensive later.
-6. **Q1.4** — Single team or multi-team? Touches every table and security policy, and relates to Q20.10 on sharing the MCP server.
-7. **Q14.1** — External API import? Determines whether the schedule and assignment features are possible, and materially improves AI insight quality (Q20.11).
+1. ~~**Q3.1** — JSONB vs. real tables per form.~~ ✓ **CLOSED: Option A (JSONB).**
+2. ~~**Q3.9** — Semantic field metadata as part of every field.~~ ✓ **CLOSED: yes; description/unit/phase/direction required.**
+3. ~~**Q15.8** — The transport-agnostic use-case service layer.~~ ✓ **CLOSED: yes.**
+4. ~~**Q7.4** — Must statistics work offline?~~ ✓ **CLOSED: yes — shared TS engine runs in the browser.**
+5. ~~**Q16.2** — Hebrew/RTL support?~~ ✓ **CLOSED: English LTR chrome, Hebrew bidi-aware form content.**
+6. ~~**Q1.4** — Single team or multi-team?~~ ✓ **CLOSED: single team.**
+7. ~~**Q14.1** — External API import?~~ ✓ **CLOSED: wanted, deferred → §24 nice-to-have.**
+
+All seven top blockers are now closed. Next-tier durable questions still open: Q3.7 (delete-form semantics), Q9.4 (duplicate-scout resolution), Q6.5 (dead-robot status), Q5.2 (scouter login).
 
 ---
 
@@ -920,3 +945,15 @@ Every edit is logged here so changes can be audited without reprinting the docum
 | v0.3 | 2026-08-12 | 0.2, 19.1, 20.1, 20.4, 21, 22 | **Scope decision:** AI/MCP is setup only — no LLM connection. Phases 5–6 marked deferred. Q20.1–Q20.4 and Q20.7–Q20.12 parked; Q20.5–Q20.6 remain live. First Decision Log entry added. |
 | v0.4 | 2026-08-12 | 23 | Added this change history section. Companion file `COLLABORATION.md` created (process rules, answer shorthand, session templates, review workflow, build-phase rules). |
 | v0.5 | 2026-08-12 | — | No spec changes. `COLLABORATION.md` v1.1 adds section 10 (working in Claude Code: surface choice, `CLAUDE.md`, `/clear` discipline, plan mode, review loop, permissions). `CLAUDE.md` created for the repo root. |
+| v0.6 | 2026-08-14 | 0, 1.1, 3.1, 7.1, 8.1, 15.1, 16.1, 21, 22, 24 (new) | Closed the seven top blockers plus Q3.2/Q15.1/Q15.2/Q15.4: storage = Option A (JSONB); immutable versioning (label/range edits in place); semantic metadata required (desc/unit/phase/direction); offline stats yes; single-team; English LTR chrome + Hebrew bidi form content; all-traffic-through-server; TypeScript everywhere (React+Vite / Node+Hono / shared engine); runtime-generated form validation. Cross-device realtime and TBA/FRC import moved to new §24 nice-to-have. Decision Log rows added. `nice` shorthand added to `COLLABORATION.md` §3 and `CLAUDE.md`. |
+
+---
+
+## 24. Nice-to-have (wanted, deferred)
+
+Confirmed as **wanted but deliberately out of current scope** — revisit later. Distinct from *parked* (topic 20 — timing undecided pending a separate decision) and *skip* (out of scope permanently). Shorthand `Q_ nice` moves an item here.
+
+| Item | Source | Note |
+|---|---|---|
+| **External data import (TBA / FRC Events API)** — event, team, schedule and result import | Q14.1, topic 14 | Wanted, not now. Deferring it also defers schedule-driven **scouter assignments** (Q6.1/Q6.2) and **official-result validation** (topic 13), which depend on it. |
+| **Cross-device live updates (Supabase Realtime)** — another device's changes appearing without a refresh | Q15.1, topic 8 | Optimistic local UI and refresh-on-triggers ship now; automatic cross-device push is deferred. Additive later given the all-through-server model. |

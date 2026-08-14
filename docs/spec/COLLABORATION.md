@@ -67,6 +67,7 @@ Questions in the spec are numbered `Q<topic>.<n>`. I answer in shorthand — no 
 | `Q7.4 ?` | Explain more before I decide. Give me the short version. |
 | `Q12.1 later` | Park it. Move to a "parked" list, don't ask again. |
 | `Q16.2 skip` | Out of scope permanently. Remove from the live questions. |
+| `Q14.1 nice` | Confirmed wanted but out of current scope — move to the **Nice-to-have** list (spec §24). Distinct from `later` (timing undecided) and `skip` (never). |
 | `Q5.3 y but only for leads` | Yes with a modifier — apply it and restate the modified requirement in one line. |
 
 I'll batch answers. One message with eight answers, not eight messages.
