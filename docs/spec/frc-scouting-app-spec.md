@@ -1,7 +1,7 @@
 # FRC Scouting Platform — Design Specification (Living Document)
 
-**Status:** DRAFT v0.6 — core architecture forks decided (storage, versioning, offline stats, stack, access model, language). Topics remain OPEN pending their sub-questions.
-**Last updated:** 2026-08-14
+**Status:** DRAFT v0.8 — topic 1 CLOSED; core architecture forks decided (storage, versioning, offline stats, stack, access model, language). Remaining topics OPEN/PARTIAL pending their sub-questions.
+**Last updated:** 2026-08-15
 **Owner:** (your name / team number)
 **Destination:** this document, once all topics are CLOSED, becomes the input spec for Claude Code to generate an implementation plan.
 
@@ -21,22 +21,22 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 
 | # | Topic | Status |
 |---|-------|--------|
-| 1 | Product vision & scope | OPEN |
+| 1 | Product vision & scope | CLOSED |
 | 2 | FRC domain model & glossary | OPEN |
-| 3 | Dynamic forms — the core architecture decision | OPEN |
+| 3 | Dynamic forms — the core architecture decision | PARTIAL — Q3.1/Q3.2/Q3.9 closed |
 | 4 | Seasons, competitions & events | OPEN |
 | 5 | Users, roles, authentication & permissions | OPEN |
 | 6 | Scouting data entry (runtime UX) | OPEN |
-| 7 | Offline-first & synchronisation | OPEN |
-| 8 | Realtime (live updates, no refresh) | OPEN |
+| 7 | Offline-first & synchronisation | PARTIAL — Q7.4 closed |
+| 8 | Realtime (live updates, no refresh) | PARTIAL — optimistic UI confirmed, cross-device → §24 |
 | 9 | Statistics engine & computed metrics | OPEN |
 | 10 | Dynamic dashboards, graphs & visualisations | OPEN |
 | 11 | Search, ranking & browse | OPEN |
 | 12 | Alliance selection & pick list | OPEN |
 | 13 | Data quality, integrity & scouter reliability | OPEN |
 | 14 | External data integration (TBA / FRC Events API) | OPEN |
-| 15 | System architecture, repo layout & services | OPEN |
-| 16 | UI/UX design system & responsive behaviour | OPEN |
+| 15 | System architecture, repo layout & services | PARTIAL — Q15.1/Q15.2/Q15.4/Q15.8 closed |
+| 16 | UI/UX design system & responsive behaviour | PARTIAL — Q16.2 closed |
 | 17 | Non-functional requirements | OPEN |
 | 18 | Deployment, environments & operations | OPEN |
 | 19 | Delivery phases & priorities | OPEN |
@@ -68,26 +68,33 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 - Deployment: **Vercel** for both client and server.
 - Features to include: team search, form management, ranking, statistics (details per topic below).
 - **Single-team install.** Built only for our team; multi-tenant/multi-org is out of scope (Q1.4). *(confirmed 2026-08-14)*
+- **Team & events.** This is **FRC team 2096**, competing in the **FIRST Israel district** plus the **FIRST Championship**. The event model must therefore cover district events and a championship **with divisions** (feeds topic 4, incl. Q4.3). *(confirmed 2026-08-15, Q1.2)*
+- **Scale at a competition.** Peak concurrent use is roughly **8 scouters + 2 strategy leads + 1 admin (~11 people)**. This is small — it confirms the JSONB storage model (§3) and the all-through-server access model (§15) are safe, and keeps realtime/scale targets modest (§17). *(confirmed 2026-08-15, Q1.1)*
+- **Replaces a prior app** that failed on exactly the two headline requirements: it **did not work offline** and was **not versatile across seasons**. Offline-first (§7) and year-agnostic forms (§3) are therefore the primary, non-negotiable design drivers, validated by lived pain. *(confirmed 2026-08-15, Q1.3)*
+- **Low-maintenance, multi-season lifespan.** Maintained by a **team mentor**, not a rotating student. The system must run season after season with **minimal intervention** ("if it works, nobody should need to touch it"). This favours boring, well-documented technology over clever solutions, and makes a **maintenance/handover checklist a v1 deliverable** — what to check, renew (keys, tokens, plan limits) and update at the start of each season and when the maintainer eventually leaves. Connects to Q18.5 (account ownership survives handover). *(confirmed 2026-08-15, Q1.6)*
+- **Target completion 2026-10-01** (before the season ramps up). A soft target, not a hard deadline. *(confirmed 2026-08-15, Q1.5)*
 
-### 1.2 Proposed decisions
+### 1.2 Confirmed decisions
 
-**Primary success criterion.** I suggest we define one, because it decides a lot of trade-offs: *"During a competition, six scouters can each record one robot per match on a phone with no internet, and within 60 seconds of regaining connectivity the strategy lead sees updated team rankings on a laptop."* If that works, the product works.
+*(Confirmed 2026-08-15 on closing topic 1.)*
 
-**Explicit non-goals for v1** (to keep scope sane — challenge any of these):
+**Primary success criterion.** *"During a competition, the team's scouters can each record their assigned robot per match on a phone with no internet, and within 60 seconds of regaining connectivity the strategy lead sees updated team rankings on a laptop."* If that works, the product works.
 
-- Not a public/multi-tenant SaaS for other teams (single-team install, though see Q1.4).
+**Explicit non-goals for v1:**
+
+- Not a public/multi-tenant SaaS for other teams (single-team install — Q1.4 closed).
 - No native iOS/Android app — a PWA installable to the home screen.
 - No live-video or camera-based automatic scouting.
 - No integration with the FMS/field systems.
 
 ### 1.3 Open questions
 
-- **Q1.1** — How many people use this at a competition, roughly? (scouters, strategy leads, admins) This drives realtime volume, sync conflict likelihood, and how much the UI needs to guard against mistakes.
-- **Q1.2** — What is your **team number and district/region**? You're in Israel — is this the FRC Israel district, and do you attend Israeli district events plus possibly a championship? This affects the event/season model and the external API integration.
-- **Q1.3** — What are you using today (paper, Google Sheets, another app)? What specifically fails about it? The pain points are the highest-value requirements.
-- **Q1.4** **[RAISED BY ME]** — Should the system support **multiple teams/organisations** in one deployment (multi-tenant), or is it strictly your team? Building single-tenant is much simpler; retrofitting multi-tenancy later is expensive because it touches every table and every security policy. Decide now even if the answer is "single team".
-- **Q1.5** — Is there a hard deadline (e.g. ready before kickoff in January, or before a specific event)? This determines the phasing in topic 19.
-- **Q1.6** **[RAISED BY ME]** — Who maintains this after you? If you're graduating, the spec should favour boring, well-documented technology over clever solutions.
+- ~~**Q1.1** — How many people use this at a competition, roughly?~~ ✓ **CLOSED 2026-08-15: ~8 scouters + 2 leads + 1 admin (~11 peak)** (§1.1).
+- ~~**Q1.2** — What is your **team number and district/region**?~~ ✓ **CLOSED 2026-08-15: team 2096, FIRST Israel district + FIRST Championship (with divisions)** (§1.1).
+- ~~**Q1.3** — What are you using today, and what fails about it?~~ ✓ **CLOSED 2026-08-15: a prior app that failed offline and wasn't year-agnostic — the two primary design drivers** (§1.1).
+- ~~**Q1.4** **[RAISED BY ME]** — Should the system support **multiple teams/organisations** in one deployment (multi-tenant), or is it strictly your team?~~ ✓ **CLOSED 2026-08-14: single team** (§1.1).
+- ~~**Q1.5** — Is there a hard deadline?~~ ✓ **CLOSED 2026-08-15: soft target 2026-10-01, not hard** (§1.1).
+- ~~**Q1.6** **[RAISED BY ME]** — Who maintains this after you?~~ ✓ **CLOSED 2026-08-15: a team mentor; must be low-maintenance and multi-season, with a handover/maintenance checklist as a v1 deliverable** (§1.1).
 
 ---
 
@@ -135,7 +142,7 @@ You said "year-agnostic", which is right — but there is a set of concepts that
 
 - **Q2.1** — Do you agree with the fixed/flexible split, or do you want *everything* (including team and match number) to be a configurable field? (I recommend the split — strongly. Ask me why if you want the full argument.)
 - **Q2.2** — Do you want the multiple **form kinds** above in v1, or only match scouting first with the others later?
-- **Q2.3** **[RAISED BY ME]** — Do you scout **all 6 robots in a match** (yours plus opponents), or only opponents/partners? Do you scout your *own* robot too? This changes scouter assignment and coverage reporting.
+- **Q2.3** **[RAISED BY ME]** — Do you scout **all 6 robots in a match** (yours plus opponents), or only opponents/partners? Do you scout your *own* robot too? This changes scouter assignment and coverage reporting. *(Note: §1.1 confirms ~8 scouters at a time — more than the 6 field stations — so decide here whether the extra people are redundant scouts on the same robot or dedicated super-scouts. Relates to Q13.2.)*
 - **Q2.4** **[RAISED BY ME]** — Do you need to record data **per alliance** (e.g. total alliance score, penalties on the alliance) as opposed to per robot? Some things genuinely aren't attributable to one robot.
 - **Q2.5** **[RAISED BY ME]** — Do you want to store **official match results** (scores, ranking points, win/loss) alongside your scouted data? It's very useful for validation ("our scouted total says 42, official says 51 — someone missed something") and it comes free from the API in topic 14.
 - **Q2.6** — Do you need **practice matches** and **internal scrimmages** (your own team's testing days) as first-class events, or only official competitions?
@@ -243,15 +250,15 @@ This is a small addition to the form builder now and effectively impossible to b
 
 ### 3.4 Open questions
 
-- **Q3.1** — Do you accept **Option A (JSONB)**? If you have a strong reason to want real tables per form, tell me and I'll re-argue it.
-- **Q3.2** — Do you accept **immutable form versioning**, including "you cannot silently change a form that already has data"? The alternative is simpler to build but will eventually corrupt your historical analysis.
+- ~~**Q3.1** — Do you accept **Option A (JSONB)**?~~ ✓ **CLOSED 2026-08-14: yes, Option A** (§3.1).
+- ~~**Q3.2** — Do you accept **immutable form versioning**?~~ ✓ **CLOSED 2026-08-14: yes; label/range edits in place** (§3.1).
 - **Q3.3** — Which field types from the catalogue above do you actually want, and is anything missing? Specifically: do you want **field-position picking** (tap the field diagram) and **event logs with timestamps** (for cycle times)? These are high value in FRC and non-trivial to build.
 - **Q3.4** — How is the form **built** in the UI? (a) a list-based builder — add field, pick type, configure, reorder by drag; (b) a visual WYSIWYG canvas with live preview; (c) raw JSON editor for power users, with a UI on top. I'd suggest (a) + live preview pane, plus (c) hidden behind an "advanced" toggle.
 - **Q3.5** — When you aggregate across an entire season and a form changed mid-season, what should happen to a metric whose field only exists in some versions? (a) exclude entries missing the field; (b) treat as zero; (c) refuse and warn the user; (d) require an explicit field-mapping when creating the metric.
 - **Q3.6** **[RAISED BY ME]** — Can the **same form be reused across several competitions** in a season (I assume yes — same game), and can **one competition have several forms** (match + pit + super)? I'm assuming a many-to-many link table. Confirm.
 - **Q3.7** **[RAISED BY ME]** — What does "**delete a form**" mean when it has thousands of entries? Options: block deletion, soft-archive (hidden but data preserved), or cascade delete behind a scary confirmation. I recommend archive-by-default with hard delete only for empty forms.
 - **Q3.8** **[RAISED BY ME]** — Do you want a per-field **"show on the live team card"** flag, so the strategy lead's quick view is configurable per year rather than hard-coded?
-- **Q3.9** **[RAISED BY ME]** — Do you accept the **semantic metadata** block above as part of every field? Which of those attributes should be **required** when creating a field, and which optional? (My suggestion: description, unit, phase and direction required; the rest optional. Required fields are annoying at 2am during build season, but optional metadata never gets filled in.)
+- ~~**Q3.9** **[RAISED BY ME]** — Do you accept the **semantic metadata** block as part of every field, and which attributes are required?~~ ✓ **CLOSED 2026-08-14: yes; description/unit/phase/direction required, rest optional** (§3.1).
 - **Q3.10** **[RAISED BY ME]** — Should the form builder be able to **suggest** this metadata with an LLM? You paste the game manual's scoring section, and it proposes fields with descriptions, units, ranges and directions, which you then edit. This makes creating a new season's form take minutes instead of an evening — and it's the cheapest possible payoff from the AI work. Interested?
 
 ---
@@ -380,7 +387,7 @@ Consequences we should decide on:
 - **Q7.1** — Is the **QR-code transfer** fallback in scope for v1, or a later phase? (I lean: design for it, build it in phase 2 unless your venues really have no internet at all — in which case it's phase 1.)
 - **Q7.2** — Do you have any realistic connectivity at your events (Israeli district events specifically)? Phone data? Venue WiFi? This directly decides Q7.1.
 - **Q7.3** — Which entities must be **editable offline**? My proposal: scouting entries yes; pick list yes; notes yes; form definitions no; user management no; dashboard creation — probably read-only offline, view cached dashboards but don't build new ones. Agree?
-- **Q7.4** — Should **statistics and charts be computed on-device while offline** (so the strategy lead can rank teams with no internet — arguably the single most valuable moment of the whole weekend), or is offline read-only-raw-data acceptable? Computing offline means the metric engine must run in the browser as well as in SQL. This is a significant architectural fork — I want an explicit answer.
+- ~~**Q7.4** — Should **statistics and charts be computed on-device while offline**, or is offline read-only-raw-data acceptable?~~ ✓ **CLOSED 2026-08-14: yes — shared TS metric engine runs in the browser** (§7.1).
 - **Q7.5** — When two devices edited the same entry, who wins: latest timestamp, the lead's version, or ask a human? And should we keep the loser for inspection?
 - **Q7.6** **[RAISED BY ME]** — Do you want **device-to-device sync on a local network** (no internet, one laptop as hub), or only device→cloud?
 - **Q7.7** **[RAISED BY ME]** — How much local storage can we assume? Photos are the risk — 6 robots × 40 teams of pit photos will not fit comfortably. Should photos be deferred-upload-only and never cached in bulk?
@@ -585,7 +592,7 @@ Manually typing 40 team numbers and 100 matches into an app at 8am on competitio
 
 ### 14.3 Open questions
 
-- **Q14.1** — Do you want this integration? (Strong recommendation: yes.) TBA, the official FRC Events API, or both?
+- ~~**Q14.1** — Do you want this integration? TBA, the official FRC Events API, or both?~~ ✓ **CLOSED 2026-08-14: wanted, deferred → §24 nice-to-have.**
 - **Q14.2** — Do you have (or can you get) a TBA read API key? It's free — you request it from your TBA account.
 - **Q14.3** — Should match **results** be imported (scores, ranking points, winners), or only the schedule?
 - **Q14.4** — How often should it sync during an event, given connectivity is limited? Manual "sync now" only, or automatic when online?
@@ -659,14 +666,14 @@ The pay-off is that MCP support becomes a mechanical mapping — a Zod schema co
 
 ### 15.3 Open questions
 
-- **Q15.1** — Do you accept the **hybrid** access model, or do you want all traffic to go through your server API?
-- **Q15.2** — Client framework: **Vite + React SPA** (simplest, best PWA/offline story, fastest dev loop) or **Next.js** (SSR, routing conventions, one framework for both apps, but its offline/PWA story is more awkward). I lean Vite + React for the client precisely because offline is a core requirement.
+- ~~**Q15.1** — Do you accept the **hybrid** access model, or all traffic through the server API?~~ ✓ **CLOSED 2026-08-14: all traffic through the server API** (§15.1).
+- ~~**Q15.2** — Client framework: Vite + React SPA or Next.js?~~ ✓ **CLOSED 2026-08-14: React + Vite PWA** (§15.1).
 - **Q15.3** — Server framework: Hono (tiny, fast, great on Vercel Functions), Express (familiar), or Next.js API routes? And do you want **tRPC** for end-to-end typed calls between client and server?
-- **Q15.4** — TypeScript everywhere, I assume? Confirm.
+- ~~**Q15.4** — TypeScript everywhere?~~ ✓ **CLOSED 2026-08-14: yes** (§15.1).
 - **Q15.5** **[RAISED BY ME]** — Do you want **generated database types** from Supabase (so a schema change surfaces as a compile error), and **Zod** validation shared between client and server?
 - **Q15.6** **[RAISED BY ME]** — Where do **file uploads** (robot photos) go — Supabase Storage, presumably? And who is allowed to upload?
 - **Q15.7** **[RAISED BY ME]** — Do you need a **local development** setup that works without touching production data (Supabase local via Docker, or a separate dev project)? I strongly recommend a separate dev Supabase project at minimum — you do not want to test a "delete form" feature against real competition data.
-- **Q15.8** **[RAISED BY ME]** — Do you accept the **use-case / transport-agnostic service layer**? It costs a little discipline up front and is the difference between MCP being a day of work and a month of work. This is my strongest recommendation in this whole section.
+- ~~**Q15.8** **[RAISED BY ME]** — Do you accept the **use-case / transport-agnostic service layer**?~~ ✓ **CLOSED 2026-08-14: yes** (§15.1).
 - **Q15.9** **[RAISED BY ME]** — Should the **MCP server be its own deployable app** (`apps/mcp`) or a route inside the existing server app (`apps/server/mcp`)? A separate app gives independent scaling, its own auth surface and cleaner logs; a route is less to maintain. I lean toward a route in the server app now, extractable later, since they share the same core.
 
 ---
@@ -690,7 +697,7 @@ The pay-off is that MCP support becomes a mechanical mapping — a Zod schema co
 ### 16.3 Open questions
 
 - **Q16.1** — Do you have **team branding** (colours, logo, team number) to build in?
-- **Q16.2** — **Language**: English only, Hebrew only, or both? If Hebrew, we need **right-to-left layout support** from the start — retrofitting RTL is genuinely painful, and it affects every component, chart axis, and table. Please answer this early. **[RAISED BY ME]**
+- ~~**Q16.2** — **Language**: English only, Hebrew only, or both?~~ ✓ **CLOSED 2026-08-14: English LTR chrome, Hebrew bidi-aware form content** (§16.1). **[RAISED BY ME]**
 - **Q16.3** — Any app you like the look/feel of that I should use as a reference?
 - **Q16.4** **[RAISED BY ME]** — Do you need **printable views** (pick list, match preview, blank paper backup form)? A printed paper form as an emergency fallback when the tablets die is standard practice.
 - **Q16.5** **[RAISED BY ME]** — Should the app be usable **with gloves / wet hands / in sunlight**? Affects target sizes and contrast.
@@ -768,8 +775,8 @@ Pit and super scouting forms → photos → advanced field types (position picke
 **Phase 5 — MCP server (DEFERRED, not currently in scope)**
 Expose the existing use cases as MCP tools, resources and prompts → auth for the MCP endpoint → connect an MCP client and iterate on tool descriptions → evals.
 
-**Phase 6 — In-app AI (DEFERRED, not currently in scope)**
-Server-side LLM orchestration → in-app chat/insights panel → cached briefing documents → notes summarisation → natural-language-to-chart.
+**Phase 6 — In-app AI (NICE-TO-HAVE, see §24)**
+Server-side LLM orchestration → in-app chat/insights panel → cached briefing documents → notes summarisation → natural-language-to-chart. *(Moved to §24 nice-to-have 2026-08-15. MCP server, phase 5, remains parked in topic 20 — not nice-to-have.)*
 
 **Important:** phases 5 and 6 are deferred by the scope decision in topic 20.1, but two of their prerequisites are *early* and cannot be deferred — the **semantic field metadata** in topic 3.3 (part of phase 1's form builder) and the **use-case service layer** in topic 15.2 (part of phase 1's server). Everything else about AI can wait; those two cannot.
 
@@ -804,6 +811,8 @@ We build the *foundations* that make MCP possible and we stop there. Concretely,
 Explicitly **not** in scope now: any MCP endpoint, any MCP transport or auth, any LLM API call, any in-app AI panel, any prompt engineering, any token budget, any AI-generated insight.
 
 The point of this decision is that none of the deferred work requires changing anything built in phase 1. The two prerequisites above are the only things that would be painful to add later — everything else is additive.
+
+*(2026-08-15) The **in-app AI panel** (approach B in §20.3, phase 6) is now formally logged as **nice-to-have** in §24. The **MCP server** (approach A, phase 5) remains **parked** here — its timing is undecided pending a separate decision, distinct from nice-to-have.*
 
 ### 20.2 What "MCP-ready" actually means
 
@@ -890,6 +899,8 @@ Decisions get recorded here as topics close, so Claude Code (and future you) can
 | 2026-08-14 | 15 | **TypeScript everywhere (React+Vite client, Node+Hono server, shared engine); all traffic through the server API; transport-agnostic use-case layer; runtime-generated form validation.** | One language lets the offline metric engine be written once and shared, avoiding drift on the most correctness-critical code; Zod→JSON Schema makes MCP a mechanical mapping. All-through-server is a clean single control point once cross-device realtime is deferred. |
 | 2026-08-14 | 8 / 15 | **Cross-device live push deferred to nice-to-have; optimistic local UI kept.** | Removes the one thing that fought the all-through-server model and the Vercel serverless constraint; local-first UX plus refresh triggers cover the real need. |
 | 2026-08-14 | 14 | **External API import (TBA/FRC) → nice-to-have.** | Wanted but not now; defers dependent scouter-assignment and result-validation features. |
+| 2026-08-15 | 20 | **In-app AI panel (approach B, phase 6) → nice-to-have (§24).** MCP server (approach A, phase 5) stays parked, not nice-to-have. | Consistency: the actual LLM-in-app connection is a wanted-but-deferred feature like TBA import, so it belongs in §24. The MCP endpoint's timing is a separate future decision, so it stays parked. Setup-only prerequisites remain in phase 1. |
+| 2026-08-15 | 1 | **Topic 1 CLOSED.** Team 2096, FIRST Israel district + Championship (divisions). ~11 peak users (8 scouters/2 leads/1 admin). Replaces a prior app that failed offline and across seasons. Mentor-maintained, low-maintenance multi-season, handover checklist a v1 deliverable. Soft target 2026-10-01. Success criterion + v1 non-goals confirmed. | Scale is small → confirms JSONB (§3) and all-through-server (§15) are safe. Championship participation forces division modelling (§4). Prior-app pain validates offline-first + year-agnostic as the primary drivers. Mentor ownership + multi-season lifespan mandates boring, documented tech and an explicit handover artifact. |
 
 ---
 
@@ -898,8 +909,9 @@ Decisions get recorded here as topics close, so Claude Code (and future you) can
 Quick reference for what's still unanswered. Answered questions get struck through and moved into the relevant section as a confirmed requirement.
 
 **Closed 2026-08-14:** Q1.4, Q3.1, Q3.2, Q3.9, Q7.4, Q15.1, Q15.2, Q15.4, Q15.8, Q16.2 → confirmed requirements. Q14.1 → §24 nice-to-have.
+**Closed 2026-08-15:** Q1.1, Q1.2, Q1.3, Q1.5, Q1.6 → confirmed requirements (**topic 1 CLOSED**).
 
-- **Topic 1:** Q1.1 – Q1.6
+- ~~**Topic 1:** Q1.1 – Q1.6~~ ✓ **CLOSED** — all confirmed in §1.1.
 - **Topic 2:** Q2.1 – Q2.7
 - **Topic 3:** Q3.1 – Q3.10
 - **Topic 4:** Q4.1 – Q4.5
@@ -946,6 +958,8 @@ Every edit is logged here so changes can be audited without reprinting the docum
 | v0.4 | 2026-08-12 | 23 | Added this change history section. Companion file `COLLABORATION.md` created (process rules, answer shorthand, session templates, review workflow, build-phase rules). |
 | v0.5 | 2026-08-12 | — | No spec changes. `COLLABORATION.md` v1.1 adds section 10 (working in Claude Code: surface choice, `CLAUDE.md`, `/clear` discipline, plan mode, review loop, permissions). `CLAUDE.md` created for the repo root. |
 | v0.6 | 2026-08-14 | 0, 1.1, 3.1, 7.1, 8.1, 15.1, 16.1, 21, 22, 24 (new) | Closed the seven top blockers plus Q3.2/Q15.1/Q15.2/Q15.4: storage = Option A (JSONB); immutable versioning (label/range edits in place); semantic metadata required (desc/unit/phase/direction); offline stats yes; single-team; English LTR chrome + Hebrew bidi form content; all-traffic-through-server; TypeScript everywhere (React+Vite / Node+Hono / shared engine); runtime-generated form validation. Cross-device realtime and TBA/FRC import moved to new §24 nice-to-have. Decision Log rows added. `nice` shorthand added to `COLLABORATION.md` §3 and `CLAUDE.md`. |
+| v0.7 | 2026-08-15 | 0.2, 1.3, 3.4, 7.4, 14.3, 15.3, 16.3, 19.1, 20.1, 21, 24 | **Consistency pass.** Struck through the already-answered questions still printed as open in their per-topic lists (Q1.4, Q3.1/Q3.2/Q3.9, Q7.4, Q14.1, Q15.1/Q15.2/Q15.4/Q15.8, Q16.2) with pointers to where each is confirmed. Set topics 1/3/7/8/15/16 to PARTIAL in the §0.2 status table. Moved the in-app AI panel (phase 6) to §24 nice-to-have; MCP server (phase 5) stays parked. Decision Log row added. |
+| v0.8 | 2026-08-15 | 0, 0.2, 1.1, 1.2, 1.3, 2.3, 21 | **Topic 1 CLOSED.** Answered Q1.1/Q1.2/Q1.3/Q1.5/Q1.6; moved §1.2 success criterion + non-goals to confirmed. Added confirmed facts: team 2096, Israel district + Championship (divisions), ~11 peak users, prior-app pain points, mentor low-maintenance lifespan + handover-checklist deliverable, soft 2026-10-01 target. Flagged the 8-scouters-vs-6-stations coverage question on Q2.3. Status table topic 1 → CLOSED. Decision Log row added. |
 
 ---
 
@@ -957,3 +971,4 @@ Confirmed as **wanted but deliberately out of current scope** — revisit later.
 |---|---|---|
 | **External data import (TBA / FRC Events API)** — event, team, schedule and result import | Q14.1, topic 14 | Wanted, not now. Deferring it also defers schedule-driven **scouter assignments** (Q6.1/Q6.2) and **official-result validation** (topic 13), which depend on it. |
 | **Cross-device live updates (Supabase Realtime)** — another device's changes appearing without a refresh | Q15.1, topic 8 | Optimistic local UI and refresh-on-triggers ship now; automatic cross-device push is deferred. Additive later given the all-through-server model. |
+| **In-app AI insights panel** — server-side LLM orchestration, in-app chat/insights UI, cached briefings, notes summarisation, NL-to-chart | Topic 20 (approach B), phase 6 | Wanted, not now. Requires internet so unavailable at most of a competition; generated insights would be cached for offline reading. The setup-only prerequisites (semantic field metadata §3, use-case layer §15) stay in phase 1. **MCP server (phase 5) is *not* here — it stays parked in topic 20.** |
