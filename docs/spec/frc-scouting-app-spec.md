@@ -22,7 +22,7 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 | # | Topic | Status |
 |---|-------|--------|
 | 1 | Product vision & scope | CLOSED |
-| 2 | FRC domain model & glossary | OPEN |
+| 2 | FRC domain model & glossary | CLOSED |
 | 3 | Dynamic forms — the core architecture decision | PARTIAL — Q3.1/Q3.2/Q3.9 closed |
 | 4 | Seasons, competitions & events | OPEN |
 | 5 | Users, roles, authentication & permissions | OPEN |
@@ -108,12 +108,12 @@ You said "year-agnostic", which is right — but there is a set of concepts that
 
 | Entity | Meaning |
 |---|---|
-| Season | A year, e.g. 2026. Has one game. |
-| Event / Competition | A specific competition (district event, regional, championship division, or an internal scrimmage). Belongs to a season. |
-| Team | An FRC team: number, name, rookie year, region. Global, spans seasons. |
-| Match | A match at an event: type (practice / qualification / playoff), match number, the 3 red teams, the 3 blue teams, optionally the official result. |
+| Season | A year, e.g. 2026. Has one game and one **scoring model** (below). |
+| Event / Competition | A specific competition (district event, championship division, or an internal scrimmage). Identified by **name + year**; belongs to a season. *(Division/hierarchy → topic 4.)* |
+| Team | An FRC team: **team number + team name only**. Global, spans seasons. |
+| Match | A match at an event: type (practice / qualification / playoff), match number, the 3 red teams, the 3 blue teams, and a **reserved nullable official result** (score / RP / W-L). Only **qualification** matches feed metric aggregates (Q2.6). |
 | Scouter (User) | A person entering data. |
-| Scouting Entry | One observation: one scouter, one team, one match, one form version → a payload of answers. |
+| Scouting Entry | One observation: one scouter, one team, one match, one form version → a payload of answers. Covers all **6 robots per match, including team 2096's own** (Q2.3). |
 
 **Flexible layer (created by you in the app, differs every year):**
 
@@ -122,31 +122,42 @@ You said "year-agnostic", which is right — but there is a set of concepts that
 | Form | The game-specific questionnaire ("2026 match scouting"). |
 | Form Version | An immutable snapshot of a form's fields. |
 | Field | One question: type, label, validation, section, conditional logic. |
-| Metric | A computed value derived from fields (e.g. "total game pieces = auto + teleop"). |
+| Scoring model | The season's official point map: game points per scorable action, **per-option points for enum/select fields** (e.g. climb none/low/high), and a **success definition per mission** (what counts as a completed attempt). Game-specific, captured with the fields, **not backfillable**; drives the metric engine (topics 3 & 9). **[RAISED BY ME → confirmed]** |
+| Metric | A computed value derived from fields and the scoring model (e.g. "total game pieces = auto + teleop"). |
+| Own-robot log | Season-long record of team 2096's **own robot**: reliability log, mechanism changes, drive-team match notes (Q2.7). Separate from the match entry that scouts our robot as one of the 6. |
 | Dashboard / Chart | A saved visualisation configuration referencing fields and metrics. |
 
-### 2.2 Proposed decisions
+### 2.2 Confirmed requirements
 
-- **Team, Event, Match, Season are fixed schema.** Every scouting entry carries structured foreign keys to these, plus a flexible payload for the game-specific answers.
-- **Team numbers are global and stable** — team 1577 in 2024 and 2026 is the same team, so multi-season team history works for free.
-- **Multiple form types per season.** Not everything is match scouting. I strongly suggest supporting at least these form *kinds*, because they have different cardinality and you will want them:
+- **Fixed/flexible split confirmed** (Q2.1). Fixed schema: Season, Event, Team, Match, Scouter, Scouting Entry — each entry carries structured foreign keys plus a flexible game payload. Event = **name + year**; Team = **number + name only**.
+- **Team numbers are global and stable** — team 2096 in 2024 and 2026 is the same team, so multi-season history works for free.
+- **Season scoring model** (Q2.1). Each season has a point map relating field values — including per-enum-option points and per-mission success criteria — to game points. Captured at form/field-creation time (same non-backfillable gotcha as semantic metadata, §3.3); field-level mechanics resolved in topics 3 and 9.
+- **Form kinds in v1: Match scouting + Super scouting only** (Q2.2). Pit / human / other remain addable later through the `kind` field; not built in v1.
 
 | Form kind | One record per | Purpose |
 |---|---|---|
 | Match scouting | (team, match) | Quantitative performance in a match. |
-| Pit scouting | (team, event) | Robot specs: drivetrain, weight, mechanisms, language, photos. |
 | Super scouting / qualitative | (team, match) or (team, event) | Driver skill, defence, penalties, breakdowns — the subjective read. |
-| Human/other | free | Anything else you invent later. |
 
-### 2.3 Open questions
+- **Scouting coverage** (Q2.3): all **6 robots per match, including our own**; one match-scouter per robot. With ~8 scouters (topic 1), the ~2 beyond the six field robots do super scouting.
+- **No per-alliance records** (Q2.4): everything is attributed per robot.
+- **Official match results** (Q2.5): schema is **reserved now as nullable** (score / RP / W-L) so no migration is needed when TBA import (§24) lands; until populated the **UI hides official-result displays entirely — it must never render an empty score box.**
+- **Match inclusion in metrics** (Q2.6): practice and playoff matches are stored under their event and viewable on the search/forms page, but are **excluded from all metric aggregates**; only **qualification** matches are computed.
+- **Own-robot tracking** (Q2.7): **in scope** — a season-long log of our robot (reliability, mechanism changes, drive-team notes), separate from match scouting. Detailed design deferred (see §2.3).
 
-- **Q2.1** — Do you agree with the fixed/flexible split, or do you want *everything* (including team and match number) to be a configurable field? (I recommend the split — strongly. Ask me why if you want the full argument.)
-- **Q2.2** — Do you want the multiple **form kinds** above in v1, or only match scouting first with the others later?
-- **Q2.3** **[RAISED BY ME]** — Do you scout **all 6 robots in a match** (yours plus opponents), or only opponents/partners? Do you scout your *own* robot too? This changes scouter assignment and coverage reporting. *(Note: §1.1 confirms ~8 scouters at a time — more than the 6 field stations — so decide here whether the extra people are redundant scouts on the same robot or dedicated super-scouts. Relates to Q13.2.)*
-- **Q2.4** **[RAISED BY ME]** — Do you need to record data **per alliance** (e.g. total alliance score, penalties on the alliance) as opposed to per robot? Some things genuinely aren't attributable to one robot.
-- **Q2.5** **[RAISED BY ME]** — Do you want to store **official match results** (scores, ranking points, win/loss) alongside your scouted data? It's very useful for validation ("our scouted total says 42, official says 51 — someone missed something") and it comes free from the API in topic 14.
-- **Q2.6** — Do you need **practice matches** and **internal scrimmages** (your own team's testing days) as first-class events, or only official competitions?
-- **Q2.7** **[RAISED BY ME]** — Should the app track **your own team's robot** across the season (reliability log, mechanism changes, match notes from the drive team)? It's adjacent but often wanted.
+### 2.3 Resolved & spun-out questions
+
+- ~~**Q2.1**~~ ✓ **CLOSED:** fixed/flexible split accepted; Event = name+year, Team = number+name. Season **scoring model** added (§2.1–§2.2).
+- ~~**Q2.2**~~ ✓ **CLOSED:** match + super scouting only in v1.
+- ~~**Q2.3**~~ ✓ **CLOSED:** all 6 robots incl. our own, one scouter each; spare scouters super-scout.
+- ~~**Q2.4**~~ ✓ **CLOSED:** no per-alliance data.
+- ~~**Q2.5**~~ ✓ **CLOSED:** reserve nullable official-result schema; UI never shows empty score boxes.
+- ~~**Q2.6**~~ ✓ **CLOSED:** practice + playoff stored & searchable, excluded from metrics; qualification only.
+- ~~**Q2.7**~~ ✓ **CLOSED:** own-robot tracking is in scope.
+
+**Spun out of topic 2 (do not block closure):**
+- **Q2.8** — Scoring-model field mechanics: where point values / success predicates live (per-field attribute vs. a season-level map) and the formula language. → resolve in **topic 3** (field config) and **topic 9** (metric engine).
+- **Q2.9** **[RAISED BY ME]** — Own-robot log needs its own detailed scope (what is logged, by whom, offline behaviour). Not covered by any existing topic. → **needs a dedicated mini-topic.**
 
 ---
 
@@ -243,6 +254,8 @@ An LLM cannot reason about a field called `f_17` holding the number `3`. For the
 | `include_in_ai_context` | true / false | Lets you exclude noisy or private fields from anything sent to a model. |
 
 This is a small addition to the form builder now and effectively impossible to backfill later — nobody will go back and describe 80 fields for three past seasons. It is also useful independent of AI: the same metadata drives chart axis labels, units in tables, default sort direction, and validation warnings. This is why I want it decided in topic 3, not topic 20.
+
+**Scoring attributes (from topic 2).** Fields that contribute to the game score also carry point value(s) — per enum option where relevant — and an optional success predicate, captured here at creation time for the same non-backfillable reason. This is the **season scoring model** (§2.1). Exact storage and formula mechanics are Q2.8, resolved with the metric engine in topic 9.
 
 **Conditional logic:** simple rules only — `show this field if <field> <op> <value>`. Not a general expression language.
 
@@ -900,6 +913,8 @@ Decisions get recorded here as topics close, so Claude Code (and future you) can
 | 2026-08-14 | 8 / 15 | **Cross-device live push deferred to nice-to-have; optimistic local UI kept.** | Removes the one thing that fought the all-through-server model and the Vercel serverless constraint; local-first UX plus refresh triggers cover the real need. |
 | 2026-08-14 | 14 | **External API import (TBA/FRC) → nice-to-have.** | Wanted but not now; defers dependent scouter-assignment and result-validation features. |
 | 2026-08-15 | 20 | **In-app AI panel (approach B, phase 6) → nice-to-have (§24).** MCP server (approach A, phase 5) stays parked, not nice-to-have. | Consistency: the actual LLM-in-app connection is a wanted-but-deferred feature like TBA import, so it belongs in §24. The MCP endpoint's timing is a separate future decision, so it stays parked. Setup-only prerequisites remain in phase 1. |
+| 2026-08-17 | 2 | **Topic 2 CLOSED.** Fixed/flexible split confirmed; Event = name+year, Team = number+name. Added a **season scoring model** (point map incl. per-enum-option points + per-mission success criteria) captured at field-creation time. v1 form kinds = match + super only. Scout all 6 robots incl. our own. No per-alliance data. | Fixes the stable-vs-game-specific boundary the whole app rests on. The scoring model is game-specific yet can't live loose in a payload — metrics need it structured, and like semantic metadata it can't be backfilled, so it's captured up front. Match+super match the team's real workflow; pit/other stay cheap to add via the `kind` field. |
+| 2026-08-17 | 2 | **Official results reserved-nullable; practice/playoff stored but excluded from metrics; own-robot tracking in scope.** | Reserving the results schema now avoids a later migration and costs nothing if TBA import never lands — paired with a UI rule to hide absent scores, never show blanks. Practice/playoff data is useful to browse but would distort averages, so only qualification matches feed metrics. Own-robot tracking is a stated need adjacent to scouting; scoped as its own log. |
 | 2026-08-15 | 1 | **Topic 1 CLOSED.** Team 2096, FIRST Israel district + Championship (divisions). ~11 peak users (8 scouters/2 leads/1 admin). Replaces a prior app that failed offline and across seasons. Mentor-maintained, low-maintenance multi-season, handover checklist a v1 deliverable. Soft target 2026-10-01. Success criterion + v1 non-goals confirmed. | Scale is small → confirms JSONB (§3) and all-through-server (§15) are safe. Championship participation forces division modelling (§4). Prior-app pain validates offline-first + year-agnostic as the primary drivers. Mentor ownership + multi-season lifespan mandates boring, documented tech and an explicit handover artifact. |
 
 ---
@@ -910,9 +925,10 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 
 **Closed 2026-08-14:** Q1.4, Q3.1, Q3.2, Q3.9, Q7.4, Q15.1, Q15.2, Q15.4, Q15.8, Q16.2 → confirmed requirements. Q14.1 → §24 nice-to-have.
 **Closed 2026-08-15:** Q1.1, Q1.2, Q1.3, Q1.5, Q1.6 → confirmed requirements (**topic 1 CLOSED**).
+**Closed 2026-08-17:** Q2.1 – Q2.7 → confirmed requirements (**topic 2 CLOSED**). New spun-out: Q2.8 → topics 3 & 9; Q2.9 → needs a dedicated topic.
 
 - ~~**Topic 1:** Q1.1 – Q1.6~~ ✓ **CLOSED** — all confirmed in §1.1.
-- **Topic 2:** Q2.1 – Q2.7
+- ~~**Topic 2:** Q2.1 – Q2.7~~ ✓ **CLOSED** — confirmed in §2. Spun out: Q2.8 (scoring mechanics) → topics 3 & 9; Q2.9 (own-robot scope) → new topic.
 - **Topic 3:** Q3.1 – Q3.10
 - **Topic 4:** Q4.1 – Q4.5
 - **Topic 5:** Q5.1 – Q5.8
@@ -942,7 +958,7 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 6. ~~**Q1.4** — Single team or multi-team?~~ ✓ **CLOSED: single team.**
 7. ~~**Q14.1** — External API import?~~ ✓ **CLOSED: wanted, deferred → §24 nice-to-have.**
 
-All seven top blockers are now closed. Next-tier durable questions still open: Q3.7 (delete-form semantics), Q9.4 (duplicate-scout resolution), Q6.5 (dead-robot status), Q5.2 (scouter login).
+All seven top blockers are now closed. Next-tier durable questions still open: Q3.7 (delete-form semantics), Q9.4 (duplicate-scout resolution), Q6.5 (dead-robot status), Q5.2 (scouter login), Q2.8 (scoring-model mechanics → topics 3/9), Q2.9 (own-robot log scope → new topic).
 
 ---
 
@@ -959,6 +975,7 @@ Every edit is logged here so changes can be audited without reprinting the docum
 | v0.5 | 2026-08-12 | — | No spec changes. `COLLABORATION.md` v1.1 adds section 10 (working in Claude Code: surface choice, `CLAUDE.md`, `/clear` discipline, plan mode, review loop, permissions). `CLAUDE.md` created for the repo root. |
 | v0.6 | 2026-08-14 | 0, 1.1, 3.1, 7.1, 8.1, 15.1, 16.1, 21, 22, 24 (new) | Closed the seven top blockers plus Q3.2/Q15.1/Q15.2/Q15.4: storage = Option A (JSONB); immutable versioning (label/range edits in place); semantic metadata required (desc/unit/phase/direction); offline stats yes; single-team; English LTR chrome + Hebrew bidi form content; all-traffic-through-server; TypeScript everywhere (React+Vite / Node+Hono / shared engine); runtime-generated form validation. Cross-device realtime and TBA/FRC import moved to new §24 nice-to-have. Decision Log rows added. `nice` shorthand added to `COLLABORATION.md` §3 and `CLAUDE.md`. |
 | v0.7 | 2026-08-15 | 0.2, 1.3, 3.4, 7.4, 14.3, 15.3, 16.3, 19.1, 20.1, 21, 24 | **Consistency pass.** Struck through the already-answered questions still printed as open in their per-topic lists (Q1.4, Q3.1/Q3.2/Q3.9, Q7.4, Q14.1, Q15.1/Q15.2/Q15.4/Q15.8, Q16.2) with pointers to where each is confirmed. Set topics 1/3/7/8/15/16 to PARTIAL in the §0.2 status table. Moved the in-app AI panel (phase 6) to §24 nice-to-have; MCP server (phase 5) stays parked. Decision Log row added. |
+| v0.9 | 2026-08-17 | 0.2, 2.1, 2.2, 2.3, 3.3, 21, 22 | **Topic 2 CLOSED.** Answered Q2.1–Q2.7. Narrowed Event to name+year and Team to number+name. Added the season **scoring model** and **own-robot log** to the glossary; cut v1 form kinds to match+super; scout all 6 robots incl. our own; no per-alliance data; official results reserved-nullable with a no-empty-box UI rule; practice/playoff excluded from metrics. Spun out Q2.8 (scoring mechanics → topics 3/9) and Q2.9 (own-robot scope → new topic). Added a forward-reference in §3.3. Decision Log + status table updated. |
 | v0.8 | 2026-08-15 | 0, 0.2, 1.1, 1.2, 1.3, 2.3, 21 | **Topic 1 CLOSED.** Answered Q1.1/Q1.2/Q1.3/Q1.5/Q1.6; moved §1.2 success criterion + non-goals to confirmed. Added confirmed facts: team 2096, Israel district + Championship (divisions), ~11 peak users, prior-app pain points, mentor low-maintenance lifespan + handover-checklist deliverable, soft 2026-10-01 target. Flagged the 8-scouters-vs-6-stations coverage question on Q2.3. Status table topic 1 → CLOSED. Decision Log row added. |
 
 ---
