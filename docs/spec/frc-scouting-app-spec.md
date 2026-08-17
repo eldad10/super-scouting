@@ -24,7 +24,7 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 | 1 | Product vision & scope | CLOSED |
 | 2 | FRC domain model & glossary | CLOSED |
 | 3 | Dynamic forms — the core architecture decision | PARTIAL — Q3.1/Q3.2/Q3.9 closed |
-| 4 | Seasons, competitions & events | PARTIAL — Q4.3 closed (flat events) |
+| 4 | Seasons, competitions & events | PARTIAL — Q4.1/Q4.3 closed |
 | 5 | Users, roles, authentication & permissions | OPEN |
 | 6 | Scouting data entry (runtime UX) | OPEN |
 | 7 | Offline-first & synchronisation | PARTIAL — Q7.4 closed |
@@ -37,7 +37,7 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 | 14 | External data integration (TBA / FRC Events API) | OPEN |
 | 15 | System architecture, repo layout & services | PARTIAL — Q15.1/Q15.2/Q15.4/Q15.8 closed |
 | 16 | UI/UX design system & responsive behaviour | PARTIAL — Q16.2 closed |
-| 17 | Non-functional requirements | OPEN |
+| 17 | Non-functional requirements | PARTIAL — Q17.3 closed (free tier) |
 | 18 | Deployment, environments & operations | OPEN |
 | 19 | Delivery phases & priorities | OPEN |
 | 20 | AI insights, LLM integration & MCP readiness | SCOPED — setup only, Q20.5/Q20.6 open |
@@ -286,6 +286,9 @@ This is a small addition to the form builder now and effectively impossible to b
 - Data is organised by competition name.
 - Each competition is linked to the form representing that game.
 - Search/filter data by competition, and by all competitions within one year.
+- **Active context (season + event).** The app has one app-wide active context. The **admin sets the default** (the `is_active` event and its season; season only if no event exists yet) and the app always **opens to it**. *(Q4.1, confirmed 2026-08-17)*
+- A user may switch the season/event they are working in, but the switch is **session-only — not persisted**; reopening returns to the admin default. **Only the admin default is cached for offline use**; user overrides are never stored.
+- The active context governs **both what the user browses and which event new scouting entries attach to**. Because a wrong context silently misattributes data, the switcher lives on a **dedicated context/landing page the user deliberately opens — never in the always-visible header/nav** (§16).
 
 ### 4.2 Proposed decisions
 
@@ -296,7 +299,7 @@ This is a small addition to the form builder now and effectively impossible to b
 
 ### 4.3 Open questions
 
-- **Q4.1** — Do you want a "**current event**" that admins set globally, or should each scouter pick their own event each session? (Global with an override is safer.)
+- ~~**Q4.1**~~ ✓ **CLOSED 2026-08-17:** global admin-set default context (season + event); users may override for the **session only** (not saved; only the default is cached offline); switcher on a dedicated page, not the header (§4.1, §16).
 - **Q4.2** — Event types you need: official district event, regional, championship (with divisions), off-season event, internal scrimmage, practice day. Which of these matter?
 - ~~**Q4.3**~~ ✓ **CLOSED 2026-08-17:** flat event list — a championship division is just a regular event; no division hierarchy modelled.
 - **Q4.4** — When comparing across a season, should events be **weighted** or treated equally? (E.g. later events reflect an improved robot — do you want recency weighting in stats? See also Q9.6.)
@@ -700,6 +703,7 @@ The pay-off is that MCP support becomes a mechanical mapping — a Zod schema co
 
 - Must look good and work well on both phone and computer screens.
 - **App chrome is English and LTR** (kept simple); **form content is Hebrew** — labels and free-text notes (Q16.2). Full-app RTL is **not** required, but every text node that can hold Hebrew (form labels, notes, and their appearance on chart axes, tables and team cards) must be bidi-correct (`dir="auto"`). Built in from the start, not retrofitted. *(confirmed 2026-08-14)*
+- **The active-context (season/event) switcher lives on a dedicated context/landing page, not in the persistent header/nav** — so the working context can't be changed by accident mid-task (§4.1). *(confirmed 2026-08-17)*
 
 ### 16.2 Proposed decisions
 
@@ -731,6 +735,7 @@ The pay-off is that MCP support becomes a mechanical mapping — a Zod schema co
 | Data entry responsiveness | Every tap registers visually in under 100 ms, always local-first. |
 | Sync latency | A submitted entry appears on other online devices within 2 seconds. |
 | Scale | ~10 events/season, ~50 teams/event, ~120 matches/event, ~6 entries/match, ~80 fields/entry → roughly 6,000 entries and 500,000 field values per event. Multi-season: low hundreds of thousands of rows. This is small for Postgres, which is why Option A in topic 3 is safe. |
+| Database budget | **Supabase free tier is the operating constraint.** Store raw entries only — never persist derived scores or aggregates (the shared engine computes them); no photo/pit data in v1. Keep DB actions simple: plain SQL views (not materialized), no heavy triggers or DB-side cron. Escalate before approaching the size cap. *(confirmed 2026-08-17, Q17.3)* |
 | Concurrent users | (Depends on Q1.1.) |
 | Security | RLS on every table; no service-role key in the browser; audit log on privileged actions. |
 | Backup | Automated export of all data per season; the ability to restore. |
@@ -740,7 +745,7 @@ The pay-off is that MCP support becomes a mechanical mapping — a Zod schema co
 
 - **Q17.1** — Are those performance targets right, and is the data-scale estimate roughly correct for your team?
 - **Q17.2** **[RAISED BY ME]** — What's your **backup and export** requirement? At minimum I'd want a one-click "export this event/season to CSV+JSON" so a weekend's work can never be lost to a bug, an accidental delete, or a Supabase free-tier surprise.
-- **Q17.3** **[RAISED BY ME]** — Which **Supabase plan** are you on? The free tier pauses inactive projects and caps database size and realtime connections — a paused project on competition morning would be very bad. Worth checking before we design around it.
+- ~~**Q17.3**~~ ✓ **CLOSED 2026-08-17: Supabase free tier.** Design lean per the Database-budget row (§17.1). Two free-tier risks and their mitigations: **(1) inactive-project pause** — offline-first means scouting never depends on the DB being awake; wake and verify the project before each event, and exports (Q17.2) insulate the data regardless; **(2) size/egress caps** — raw-only storage keeps a season well within budget, but multi-season growth is archived out (export + prune) rather than kept live. If we ever must exceed the free tier I'll flag it; a plain-Postgres alternative (e.g. Neon free tier, or self-hosted Postgres) is a low-friction migration because topic 3 uses no Supabase-specific runtime DDL.
 - **Q17.4** **[RAISED BY ME]** — Privacy: minors' names in the database. Do you need anything specific here (initials only, no emails, deletion on graduation)?
 - **Q17.5** **[RAISED BY ME]** — How much automated testing do you want? Real answer, not aspirational — it changes how the implementation plan is structured.
 
@@ -920,6 +925,8 @@ Decisions get recorded here as topics close, so Claude Code (and future you) can
 | 2026-08-17 | 2 | **Topic 2 CLOSED.** Fixed/flexible split confirmed; Event = name+year, Team = number+name. Added a **scoring model** — points entered inline per field but stored/versioned **separately** from the form version; entries hold raw observations, the score is **derived** (Q2.8d: a scoring change is never a new form version). v1 form kinds = match + super only. Scout all 6 robots incl. our own. No per-alliance data. | Fixes the stable-vs-game-specific boundary the whole app rests on. Storing raw data and deriving the score means a mid-season scoring correction re-scores history instead of fragmenting it into new form versions, and makes official-result reconciliation (Q2.5) trivial. Match+super match the team's real workflow; pit/other stay cheap to add via the `kind` field. |
 | 2026-08-17 | 2 | **Official results reserved-nullable; practice/playoff stored but excluded from metrics; own robot is a regular robot.** | Reserving the results schema now avoids a later migration and costs nothing if TBA import never lands — paired with a UI rule to hide absent scores, never show blanks. Practice/playoff data is useful to browse but would distort averages, so only qualification matches feed metrics. Our robot is just one of the 6 scouted robots — no separate tracking module to build. |
 | 2026-08-17 | 4 | **Championship divisions modelled as regular flat events; no division hierarchy** (Q4.3). | A division behaves like any other event for scouting; a hierarchy adds modelling cost with no scouting benefit. |
+| 2026-08-17 | 4 / 16 | **App-wide active context (season + event): admin sets the default the app opens to; user overrides are session-only and never saved; only the default is cached offline. Governs both browsing and new-entry attribution; switcher on a dedicated page, not the header** (Q4.1). | A wrong active event silently ruins data, so the switch is deliberate (off the main nav) and non-sticky (always returns to the admin default). Not persisting overrides also removes per-user context storage — less data, simpler DB. |
+| 2026-08-17 | 17 | **Target the Supabase free tier: store raw entries only (no persisted scores/aggregates, no photos in v1), keep DB actions simple (plain views, no materialized views/heavy triggers/cron), aggregate in the shared engine** (Q17.3). | Keeps a season comfortably within free-tier size and avoids operational complexity students can't maintain. Offline-first + per-event exports insulate scouting from the free tier's inactivity pause and caps; if limits are ever hit, plain-Postgres portability (Neon/self-host) makes migration cheap. |
 
 ---
 
@@ -929,12 +936,12 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 
 **Closed 2026-08-14:** Q1.4, Q3.1, Q3.2, Q3.9, Q7.4, Q15.1, Q15.2, Q15.4, Q15.8, Q16.2 → confirmed requirements. Q14.1 → §24 nice-to-have.
 **Closed 2026-08-15:** Q1.1, Q1.2, Q1.3, Q1.5, Q1.6 → confirmed requirements (**topic 1 CLOSED**).
-**Closed 2026-08-17:** Q2.1 – Q2.7 → confirmed requirements (**topic 2 CLOSED**); Q2.9 closed (own robot = regular robot); Q4.3 closed (flat events, no division hierarchy). Q2.8d closed (scoring change ≠ new form version). New spun-out: Q2.8a–c, Q2.8e, Q2.8f → topics 3 & 9.
+**Closed 2026-08-17:** Q2.1 – Q2.7 → confirmed requirements (**topic 2 CLOSED**); Q2.9 closed (own robot = regular robot); Q4.3 closed (flat events, no division hierarchy). Q2.8d closed (scoring change ≠ new form version); Q4.1 closed (active context); Q17.3 closed (Supabase free tier). New spun-out: Q2.8a–c, Q2.8e, Q2.8f → topics 3 & 9.
 
 - ~~**Topic 1:** Q1.1 – Q1.6~~ ✓ **CLOSED** — all confirmed in §1.1.
 - ~~**Topic 2:** Q2.1 – Q2.7~~ ✓ **CLOSED** — confirmed in §2. Own robot = regular robot (Q2.9 closed). Spun out: Q2.8a–c, e, f (scoring mechanics) → topics 3 & 9.
 - **Topic 3:** Q3.1 – Q3.10
-- **Topic 4:** Q4.1, Q4.2, Q4.4, Q4.5 — ~~Q4.3~~ ✓ CLOSED 2026-08-17 (flat events, no division hierarchy)
+- **Topic 4:** Q4.2, Q4.4, Q4.5 — ~~Q4.1~~ ✓ CLOSED (active context), ~~Q4.3~~ ✓ CLOSED (flat events) 2026-08-17
 - **Topic 5:** Q5.1 – Q5.8
 - **Topic 6:** Q6.1 – Q6.8
 - **Topic 7:** Q7.1 – Q7.7
@@ -947,7 +954,7 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 - **Topic 14:** Q14.1 – Q14.5
 - **Topic 15:** Q15.1 – Q15.9
 - **Topic 16:** Q16.1 – Q16.6
-- **Topic 17:** Q17.1 – Q17.5
+- **Topic 17:** Q17.1, Q17.2, Q17.4, Q17.5 — ~~Q17.3~~ ✓ CLOSED 2026-08-17 (Supabase free tier)
 - **Topic 18:** Q18.1 – Q18.5
 - **Topic 19:** Q19.1 – Q19.3
 - **Topic 20:** Q20.5, Q20.6 live — Q20.1–Q20.4 and Q20.7–Q20.12 parked (LLM connection out of scope)
@@ -979,6 +986,7 @@ Every edit is logged here so changes can be audited without reprinting the docum
 | v0.5 | 2026-08-12 | — | No spec changes. `COLLABORATION.md` v1.1 adds section 10 (working in Claude Code: surface choice, `CLAUDE.md`, `/clear` discipline, plan mode, review loop, permissions). `CLAUDE.md` created for the repo root. |
 | v0.6 | 2026-08-14 | 0, 1.1, 3.1, 7.1, 8.1, 15.1, 16.1, 21, 22, 24 (new) | Closed the seven top blockers plus Q3.2/Q15.1/Q15.2/Q15.4: storage = Option A (JSONB); immutable versioning (label/range edits in place); semantic metadata required (desc/unit/phase/direction); offline stats yes; single-team; English LTR chrome + Hebrew bidi form content; all-traffic-through-server; TypeScript everywhere (React+Vite / Node+Hono / shared engine); runtime-generated form validation. Cross-device realtime and TBA/FRC import moved to new §24 nice-to-have. Decision Log rows added. `nice` shorthand added to `COLLABORATION.md` §3 and `CLAUDE.md`. |
 | v0.7 | 2026-08-15 | 0.2, 1.3, 3.4, 7.4, 14.3, 15.3, 16.3, 19.1, 20.1, 21, 24 | **Consistency pass.** Struck through the already-answered questions still printed as open in their per-topic lists (Q1.4, Q3.1/Q3.2/Q3.9, Q7.4, Q14.1, Q15.1/Q15.2/Q15.4/Q15.8, Q16.2) with pointers to where each is confirmed. Set topics 1/3/7/8/15/16 to PARTIAL in the §0.2 status table. Moved the in-app AI panel (phase 6) to §24 nice-to-have; MCP server (phase 5) stays parked. Decision Log row added. |
+| v0.10 | 2026-08-17 | 0.2, 4.1, 4.3, 16.1, 17.1, 17.2, 21, 22 | Added the **app-wide active context** — admin sets the default the app opens to; user overrides are session-only (not saved); only the default is cached offline; governs browsing + new-entry attribution; switcher on a dedicated page, not the header. Closed **Q4.1**, cross-noted in §16.1. Adopted the **Supabase free tier** as an explicit constraint — raw-only storage, simple DB actions, aggregate in the shared engine; closed **Q17.3** with pause/cap mitigations and a plain-Postgres fallback. Status table + Decision Log updated. |
 | v0.9 | 2026-08-17 | 0.2, 1.1, 2.1, 2.2, 2.3, 3.3, 4.3, 21, 22 | **Topic 2 CLOSED.** Answered Q2.1–Q2.9. Event = name+year, Team = number+name. Scoring model confirmed as **points entered inline per field but stored in a separately-versioned model; entries hold raw data, score is derived; a scoring change is never a new form version** (Q2.8d closed; Q2.8a–c/e/f spun out to topics 3/9). Own robot is a **regular robot** — no separate log (Q2.9). Form kinds cut to match+super; scout all 6 robots incl. ours; no per-alliance data; official results reserved-nullable with a no-empty-box UI rule; practice/playoff excluded from metrics. Also closed **Q4.3** — championship divisions are regular flat events, no hierarchy (topic 4 → PARTIAL; §1.1 rationale amended). Added a forward-reference in §3.3. Decision Log + status table updated. |
 | v0.8 | 2026-08-15 | 0, 0.2, 1.1, 1.2, 1.3, 2.3, 21 | **Topic 1 CLOSED.** Answered Q1.1/Q1.2/Q1.3/Q1.5/Q1.6; moved §1.2 success criterion + non-goals to confirmed. Added confirmed facts: team 2096, Israel district + Championship (divisions), ~11 peak users, prior-app pain points, mentor low-maintenance lifespan + handover-checklist deliverable, soft 2026-10-01 target. Flagged the 8-scouters-vs-6-stations coverage question on Q2.3. Status table topic 1 → CLOSED. Decision Log row added. |
 
