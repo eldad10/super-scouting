@@ -1,6 +1,6 @@
 # FRC Scouting Platform — Design Specification (Living Document)
 
-**Status:** DRAFT v0.8 — topic 1 CLOSED; core architecture forks decided (storage, versioning, offline stats, stack, access model, language). Remaining topics OPEN/PARTIAL pending their sub-questions.
+**Status:** DRAFT v0.14 — topics 1–5 CLOSED; core architecture forks decided (storage, versioning, offline stats, stack, access model, language, roles/auth). Remaining topics OPEN/PARTIAL pending their sub-questions.
 **Last updated:** 2026-08-18
 **Owner:** (your name / team number)
 **Destination:** this document, once all topics are CLOSED, becomes the input spec for Claude Code to generate an implementation plan.
@@ -25,7 +25,7 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 | 2 | FRC domain model & glossary | CLOSED |
 | 3 | Dynamic forms — the core architecture decision | CLOSED |
 | 4 | Seasons, competitions & events | CLOSED |
-| 5 | Users, roles, authentication & permissions | OPEN |
+| 5 | Users, roles, authentication & permissions | CLOSED |
 | 6 | Scouting data entry (runtime UX) | OPEN |
 | 7 | Offline-first & synchronisation | PARTIAL — Q7.4 closed |
 | 8 | Realtime (live updates, no refresh) | PARTIAL — optimistic UI confirmed, cross-device → §24 |
@@ -320,39 +320,46 @@ This is a small addition to the form builder now and effectively impossible to b
 
 ### 5.1 Confirmed requirements
 
-- Create users for scouters.
-- An admin user who can perform more complex actions on the database.
+- **Three global roles: Scouter, Lead, Admin** (Q5.1). Roles are **global**, not per-event; there is **no viewer/mentor role**. *(confirmed 2026-08-18)*
+- **All data is visible to every role** (Q5.1, Q5.4). Scouters, leads and admins can view everything — statistics, dashboards, teams, forms and entries. No bias-hiding of aggregates from scouters. *(confirmed 2026-08-18)*
+- **Form *templates* are admin-only; form *entries* are open to all** (Q5.1, reaffirms Q3.1/Q3.7). Creating, uploading/importing, editing and deleting a form *template* (definition/version) is **admin-only**. Submitting scouting *entries* against a form is open to **all users** — the normal scouting flow. *(confirmed 2026-08-18)*
+- **Login: admin-provisioned username + password** (Q5.2). The admin creates each account and hands out its username and password. No self-service password reset in v1 — the admin re-issues. *(confirmed 2026-08-18)*
+- **Only the admin creates users** (Q5.6); no self-registration.
+- **Only the admin promotes/demotes** a user between Scouter / Lead / Admin (Q5.2).
+- **Only the admin deletes users** (Q5.7). Deleting a user removes their access but **never deletes anything they created** — their scouting entries and any content remain, with authorship preserved. *(confirmed 2026-08-18)*
+- **Scouters may edit their own entry for 5 minutes** after they create it; once the 5-minute window passes the row **locks** for them and only a Lead or Admin can change it (Q5.3). The window is measured from the entry's **client creation timestamp**, so it behaves **identically offline and online** — it is enforced on-device by the client clock, not at sync time. Scouters do **not** hard-delete entries — removal is a Lead/Admin action (soft-delete, §7.3). Leads and Admins may edit/manage any entry at any time. *(confirmed 2026-08-18)*
+- **Offline session persistence: ~30 days, refreshed on use** (Q5.2). A scouter authenticates once (e.g. on Wi-Fi at the hotel) and stays logged in offline through the whole event. *(decided-by-Claude 2026-08-18)*
+- **Switch-scouter quick action on shared devices** (Q5.8). Shared team tablets get a fast "switch scouter" action instead of full logout/login, and **every entry records the scouter who actually entered it**. *(confirmed 2026-08-18)*
+- **No user audit log** (Q5.5). The app keeps no who-did-what-when log of user actions. *(confirmed 2026-08-18)* *(Entry edit-history as a data-quality feature is a separate, still-open Topic 13 question — this does not resolve it.)*
+- **Authorization is enforced in the server use-case layer and surfaced in the UI — not in the database** (Q5.1 close). **No Postgres Row-Level Security, no per-row policies.** Because all traffic already goes through the server API (Q15.1, the single control point), each use case checks the caller's role and the UI hides or disables actions a role may not perform. *(confirmed 2026-08-18)*
 
-### 5.2 Proposed decisions
+### 5.2 Role & permission matrix (confirmed)
 
-**Roles (draft):**
+| Capability | Scouter | Lead | Admin |
+|---|:---:|:---:|:---:|
+| Log in; view all data (stats, dashboards, teams, forms, entries) | ✓ | ✓ | ✓ |
+| Submit scouting entries; edit **own** entries (≤ 5 min, then locked) | ✓ | ✓ | ✓ |
+| Manage **all** entries (edit / fix / reassign / soft-delete others') | — | ✓ | ✓ |
+| Create a **draft statistics page** on the active competition (session-only, not saved, discarded on exit) | — | ✓ | ✓ |
+| Create / edit / **save** statistics & dashboards (persistent) | — | — | ✓ |
+| Create / upload / edit / delete **form templates** | — | — | ✓ |
+| Manage events & the active-context default (§4.1) | — | — | ✓ |
+| Create / delete users; promote / demote roles | — | — | ✓ |
 
-| Role | Can |
-|---|---|
-| Scouter | Log in, see their assignment, submit and edit **their own** entries (within a time window), view basic team pages. |
-| Lead / Strategist | Everything a scouter can, plus view and edit all entries, build dashboards, manage the pick list, see data-quality reports. |
-| Admin | Everything, plus create/edit/delete forms, manage users and roles, manage events, import external data, export/delete data. |
-| Viewer (optional) | Read-only — mentors, other students, alliance partners. |
+The **draft statistics page** (Lead) is an ephemeral dashboard scoped to the current active competition: built during a session, viewable live, **never persisted to the database**, and discarded on **exit — defined as logout or closing the app/tab**. It is held in session-scoped memory, so it **survives navigation between pages within the session** but is gone once the lead logs out or the app closes (and can be dismissed manually). Persistent/saved statistics are admin-only. See Topic 10 (§10.2) for the dashboard mechanics; this fixes only who may create ephemeral vs. saved ones.
 
-**Authentication:** Supabase Auth. The important sub-question is *how* people log in, because at a competition, 15-year-olds on borrowed phones with no internet must be able to start scouting in under 10 seconds.
+### 5.3 Resolved questions
 
-- Option 1: email + password (Supabase default). Reliable, but slow to type and kids forget passwords.
-- Option 2: admin-provisioned username + short PIN. Fastest, and works offline if the session is cached. Requires a custom flow on top of Supabase Auth.
-- Option 3: magic link / OTP by email — requires internet, so unusable at a venue. Not viable alone.
-- My suggestion: email+password for leads/admins, plus **long-lived cached sessions** for scouter devices so a scouter authenticates once at the hotel and stays logged in all weekend offline.
+- ~~**Q5.1**~~ ✓ **CLOSED 2026-08-18:** three global roles (scouter/lead/admin), no viewer/mentor, not per-event; matrix §5.2; form templates admin-only, entries open to all.
+- ~~**Q5.2**~~ ✓ **CLOSED 2026-08-18:** admin-provisioned username + password; admin promotes/demotes; ~30-day offline session.
+- ~~**Q5.3**~~ ✓ **CLOSED 2026-08-18:** scouters edit own entries for **5 min** from creation (by client timestamp, offline & online), then the row locks; leads/admins anytime; scouters don't hard-delete.
+- ~~**Q5.4**~~ ✓ **CLOSED 2026-08-18:** all data visible to all roles; no bias-hiding.
+- ~~**Q5.5**~~ ✓ **CLOSED 2026-08-18:** no user audit log (entry edit-history stays a Topic 13 question).
+- ~~**Q5.6**~~ ✓ **CLOSED 2026-08-18:** admin-only user creation; no self-registration.
+- ~~**Q5.7**~~ ✓ **CLOSED 2026-08-18:** admin-only user deletion; deletion preserves everything the user created.
+- ~~**Q5.8**~~ ✓ **CLOSED 2026-08-18:** switch-scouter quick action on shared devices; entries record the actual scouter.
 
-**Authorisation:** Supabase **Row Level Security** on every table, with role stored in a `profiles` table and read via a JWT claim. Privileged operations (form creation, user management, bulk delete, imports) go through the server service using the service-role key, never from the browser.
-
-### 5.3 Open questions
-
-- **Q5.1** — Are the roles above right? Do you need a **mentor/viewer** role, or a **per-event** role (someone is a lead at one event and a scouter at another)?
-- **Q5.2** — How do scouters log in? Which option in 5.2, or something else?
-- **Q5.3** — Can a scouter **edit or delete their own entry** after submitting? Within a time limit? Only before it syncs? (Recommendation: edit freely until the match is confirmed by a lead; full history kept.)
-- **Q5.4** — Who can see what? Is all scouting data visible to all scouters, or should a scouter only see their own submissions? (Some teams hide aggregate data from scouters to prevent bias — "I'll just enter what the average says".)
-- **Q5.5** **[RAISED BY ME]** — Do you need an **audit log** (who changed what, when, from what to what)? For a system where teenagers can edit competition-critical data, I think yes, at least for entry edits, deletions, and form changes.
-- **Q5.6** **[RAISED BY ME]** — Self-registration or admin-created accounts only? Admin-only is safer; you can invite by link.
-- **Q5.7** **[RAISED BY ME]** — Team members graduate every year. Do you need **deactivate user** (preserving their historical entries) as distinct from delete?
-- **Q5.8** **[RAISED BY ME]** — Shared devices: if the team owns 6 tablets used by different scouters each shift, do you want a "**switch scouter**" quick action rather than full logout/login? And should the *entry* record who actually entered it even on a shared device?
+**Still open (dependency, not blocking Topic 5):** Q20.6 — whether to reserve a read-only `service`/`agent` role for a future non-human (MCP) caller. App-layer authorization means it can be added later with no rework. **[RAISED BY ME]**
 
 ---
 
@@ -513,6 +520,8 @@ Consequences we should decide on:
 
 **Dashboards** are ordered collections of charts on a responsive grid, saved with a name, scoped to a season, and shareable by link. A dashboard has global filters (event, match type, team subset) that all its charts inherit unless overridden.
 
+**Saved vs. draft dashboards (role split — see Topic 5 §5.2).** Creating and **saving** a persistent dashboard is **admin-only**. A **Lead** can build a **draft statistics page** using the same builder, scoped to the **active competition**, but it is **held in session memory only**: viewable live, **never written to the database**, and discarded on **exit** — defined as **logout or closing the app/tab**. It therefore **survives navigation between pages within the session** (the lead can leave it and come back) and can be dismissed manually, but nothing persists once the session ends. **Scouters** view dashboards but create neither kind.
+
 **Builder UX:** pick a chart type → pick the dimension → add one or more series (field or metric + aggregation) → add filters → live preview → save. Aim for "understandable by a 15-year-old in 5 minutes", not Tableau.
 
 **Standard pages that should exist out of the box** (rather than requiring everyone to build them from scratch):
@@ -522,6 +531,8 @@ Consequences we should decide on:
 - Compare page: 2–6 teams side by side (radar + table).
 - Match preview: the six robots of an upcoming match with predicted contributions.
 - Coverage/quality page: which matches are missing data.
+
+**Two kinds of statistics page. [requested 2026-08-18 — content decided at Topic 10 close]** The app has (a) the **dynamic robot/team statistics pages** the user builds by pointing charts at form fields (the configurable dashboards above), and (b) a **static, always-present general statistics page** showing *data about the scouting itself*, not robot performance — a fixed operational overview that needs no configuration. Candidate contents to choose from later: entries (forms) submitted **per match / per event / total**; coverage (matches scouted vs. scheduled, robots covered of 6 per match, teams scouted of total); **entries per scouter**; qualification matches recorded vs. remaining; counts of **missing / duplicate / conflicting** entries; **pending-sync (outbox) count and last-sync time**; number of active forms this season and fields per form; super-scouting coverage. This overlaps the coverage/quality matrix (Topic 13) and must be reconciled with it when Topics 10/13 close — decide then which metrics live here vs. there.
 
 ### 10.3 Open questions
 
@@ -533,6 +544,7 @@ Consequences we should decide on:
 - **Q10.6** **[RAISED BY ME]** — Which charting library? Recharts (React-native, simple, good defaults), ECharts (very powerful, heavier, best for heatmaps and big datasets), or Visx/D3 (maximum control, most work). I lean Recharts for v1 with an escape hatch, unless you want heatmaps and large scatter plots, which push toward ECharts.
 - **Q10.7** **[RAISED BY ME]** — Do you want **drill-down** — click a bar for team 1577 and land on that team's page, click a point on a line chart and see that specific match's raw entry? It's the difference between a pretty chart and an actual analysis tool.
 - **Q10.8** **[RAISED BY ME]** — Should charts be able to compare **your scouted data against official results** (e.g. scouted contribution vs OPR) to validate your scouting?
+- **Q10.9** — What exactly belongs on the **static general statistics page** (operational/meta stats, §10.2), and does it also cover what the coverage/quality matrix (Topic 13) would show, or stay separate? *(Requested 2026-08-18; decide at Topic 10 close.)*
 
 ---
 
@@ -746,7 +758,7 @@ The pay-off is that MCP support becomes a mechanical mapping — a Zod schema co
 | Scale | ~10 events/season, ~50 teams/event, ~120 matches/event, ~6 entries/match, ~80 fields/entry → roughly 6,000 entries and 500,000 field values per event. Multi-season: low hundreds of thousands of rows. This is small for Postgres, which is why Option A in topic 3 is safe. |
 | Database budget | **Supabase free tier is the operating constraint.** Store raw entries only — never persist derived scores or aggregates (the shared engine computes them); no photo/pit data in v1. Keep DB actions simple: plain SQL views (not materialized), no heavy triggers or DB-side cron. Escalate before approaching the size cap. *(confirmed 2026-08-17, Q17.3)* |
 | Concurrent users | (Depends on Q1.1.) |
-| Security | RLS on every table; no service-role key in the browser; audit log on privileged actions. |
+| Security | Authorization enforced in the server use-case layer and surfaced in the UI — **no Postgres RLS / per-row policies** (Topic 5); no service-role key in the browser; **no user audit log** (Q5.5). |
 | Backup | Automated export of all data per season; the ability to restore. |
 | Testing | Unit tests for the metric engine and sync logic; integration tests for the sync protocol; the offline path must be tested, since it's the one that's hardest to debug at a venue. |
 
@@ -939,6 +951,9 @@ Decisions get recorded here as topics close, so Claude Code (and future you) can
 | 2026-08-17 | 3 | **Topic 3 CLOSED.** Field catalogue = all types except Photo (deferred); Timer editable-after-stop + nullable; Event log = timestamped taps; Field-position picker stores normalized 0–1 coords on the season game image with **per-field alliance normalization** (red raw, blue mirrored H/V/both, with builder preview). List-builder + live preview UI (JSON behind advanced). **Main/active version + restorable snapshots; stats run on the main version; a metric on a missing field shows "cannot calculate this metric."** A **form belongs to a season** (several forms per season, all its events use them). Delete = **cascade behind a warning, admin-only.** Per-field `show_on_team_card`. Conditional logic kept; form-duplication dropped, JSON export/import kept. LLM metadata-suggestion → §24. | Position data is meaningless without alliance framing, so normalization is captured at the field, not backfilled. One main version keeps statistics deterministic while snapshots preserve interpretability; a loud "cannot calculate" beats silently wrong aggregates. Form-per-season matches the FRC reality (one game a year) and simplifies the event→form link. Cascade-with-warning matches the team's own preference over soft-archive. |
 | 2026-08-18 | 4 | **Topic 4 CLOSED.** No event types — every event is a regular flat event (`type` dropped, Q4.2). Events weighted **equally** across a season, no event-level recency (Q4.4). **No external import in v1** — no data-import path, no `source` field on entries (Q4.5). Events model = `events(id, season_id, name, code?, is_active)`: `code` nullable and unused (reserved for deferred TBA import, §24); `start_date`/`end_date`/`location` dropped. Aggregation scopes (single event / season / all-time / custom set) adopted. | All the team's events behave identically for scouting, so a `type` field and division hierarchy add modelling cost with no benefit. Equal weighting matches how the team reasons about a season and avoids a tunable nobody would maintain. Since no data is imported, the import-only columns (`type`/dates/`location`/`source`) are dead schema — dropping them keeps the model minimal; `code` stays nullable so the deferred TBA import needs no migration. |
 | 2026-08-17 | 17 | **Target the Supabase free tier: store raw entries only (no persisted scores/aggregates, no photos in v1), keep DB actions simple (plain views, no materialized views/heavy triggers/cron), aggregate in the shared engine** (Q17.3). | Keeps a season comfortably within free-tier size and avoids operational complexity students can't maintain. Offline-first + per-event exports insulate scouting from the free tier's inactivity pause and caps; if limits are ever hit, plain-Postgres portability (Neon/self-host) makes migration cheap. |
+| 2026-08-18 | 5 | **Topic 5 CLOSED.** Three global roles (scouter/lead/admin), no viewer/mentor, not per-event. All data visible to all roles. **Form templates admin-only; submitting entries open to all** (reaffirms Q3.1/Q3.7). Login = admin-provisioned username+password; admin-only user create (Q5.6), delete (Q5.7, preserves authored content) and promote/demote. Scouters edit own entries for 5 min from creation then the row locks — same offline & online, by client timestamp (leads/admins anytime); ~30-day offline session; switch-scouter on shared devices with per-entry attribution (Q5.8); no user audit log (Q5.5). | Small, trusted team (~11) → the cost of fine-grained per-row DB security exceeds its benefit. Roles map to the real workflow: scouters feed data, leads triage it and explore live, the admin owns structure (forms, users, saved analytics, events). Preserving a deleted user's entries protects historical data across graduating students without a separate deactivate concept. |
+| 2026-08-18 | 5 / 15 / 17 | **No database-level authorization: no Postgres RLS, no per-row policies. Authorization lives in the server use-case layer and is surfaced in the UI (hide/disable).** | The team trusts its members and all traffic already flows through the single server control point (Q15.1), so the DB is not an independent attack surface to harden. One enforcement point (the use-cases) is simpler to reason about and maintain than duplicated RLS policies, and it still gates a future MCP caller since MCP reuses the same layer. Replaces the earlier RLS-on-every-table proposal and the privileged-action audit-log target in §17.1. |
+| 2026-08-18 | 5 / 10 | **Ephemeral vs. persistent statistics split by role:** leads may create a **draft statistics page** (session-only, discarded on exit); creating/saving persistent dashboards is admin-only. | Lets a strategy lead explore live during a competition without polluting the shared set of saved dashboards or needing admin rights; keeps the durable analytics surface under a single owner. Full dashboard behaviour remains Topic 10. |
 
 ---
 
@@ -949,13 +964,13 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 **Closed 2026-08-14:** Q1.4, Q3.1, Q3.2, Q3.9, Q7.4, Q15.1, Q15.2, Q15.4, Q15.8, Q16.2 → confirmed requirements. Q14.1 → §24 nice-to-have.
 **Closed 2026-08-15:** Q1.1, Q1.2, Q1.3, Q1.5, Q1.6 → confirmed requirements (**topic 1 CLOSED**).
 **Closed 2026-08-17:** Q2.1 – Q2.7 → confirmed requirements (**topic 2 CLOSED**); Q2.9 closed (own robot = regular robot); Q4.3 closed (flat events, no division hierarchy). Q2.8a–f closed (scoring model fully specified; topic 9 implements); Q4.1 closed (active context); Q17.3 closed (Supabase free tier). **Q3.3 – Q3.8 closed and Q3.10 → §24 (topic 3 CLOSED).**
-**Closed 2026-08-18:** Q4.2 (no event types), Q4.4 (equal event weighting), Q4.5 (no external import / no `source` field) → confirmed requirements (**topic 4 CLOSED**).
+**Closed 2026-08-18:** Q4.2 (no event types), Q4.4 (equal event weighting), Q4.5 (no external import / no `source` field) → confirmed requirements (**topic 4 CLOSED**). **Q5.1–Q5.8 → confirmed requirements (topic 5 CLOSED):** three global roles, form templates admin-only / entries open to all, admin-provisioned username+password, admin-only user CRUD + role changes, 5-min self-edit window (offline & online), ~30-day offline session, switch-scouter, no user audit log, **no DB RLS — authz in the use-case layer + UI**.
 
 - ~~**Topic 1:** Q1.1 – Q1.6~~ ✓ **CLOSED** — all confirmed in §1.1.
 - ~~**Topic 2:** Q2.1 – Q2.7~~ ✓ **CLOSED** — confirmed in §2. Own robot = regular robot (Q2.9 closed). Scoring model fully specified (Q2.8a–f closed); topic 9 implements.
 - ~~**Topic 3:** Q3.1 – Q3.10~~ ✓ **CLOSED** — confirmed in §3.1. Q3.10 → §24 nice-to-have.
 - ~~**Topic 4:** Q4.1 – Q4.5~~ ✓ **CLOSED** — confirmed in §4.1. Active context (Q4.1) + flat events (Q4.3) 2026-08-17; no event types (Q4.2), equal event weighting (Q4.4), no external import / no `source` field (Q4.5) 2026-08-18.
-- **Topic 5:** Q5.1 – Q5.8
+- ~~**Topic 5:** Q5.1 – Q5.8~~ ✓ **CLOSED 2026-08-18** — confirmed in §5.1–§5.2. Roles/auth/permissions settled; DB-level RLS dropped in favour of use-case-layer + UI enforcement. (Q20.6 `service`/`agent` role stays a Topic 20 dependency.)
 - **Topic 6:** Q6.1 – Q6.8
 - **Topic 7:** Q7.1 – Q7.7
 - **Topic 8:** Q8.1 – Q8.4
@@ -982,7 +997,7 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 6. ~~**Q1.4** — Single team or multi-team?~~ ✓ **CLOSED: single team.**
 7. ~~**Q14.1** — External API import?~~ ✓ **CLOSED: wanted, deferred → §24 nice-to-have.**
 
-All seven top blockers are now closed, and **topic 3 is fully CLOSED**. Next-tier durable questions still open: Q9.4 (duplicate-scout resolution), Q6.5 (dead-robot status), Q5.2 (scouter login).
+All seven top blockers are now closed, and **topics 1–5 are fully CLOSED**. Next-tier durable questions still open: Q9.4 (duplicate-scout resolution), Q6.5 (dead-robot status), Q6.1 (scouter assignment system).
 
 ---
 
@@ -1004,6 +1019,7 @@ Every edit is logged here so changes can be audited without reprinting the docum
 | v0.10 | 2026-08-17 | 0.2, 4.1, 4.3, 16.1, 17.1, 17.2, 21, 22 | Added the **app-wide active context** — admin sets the default the app opens to; user overrides are session-only (not saved); only the default is cached offline; governs browsing + new-entry attribution; switcher on a dedicated page, not the header. Closed **Q4.1**, cross-noted in §16.1. Adopted the **Supabase free tier** as an explicit constraint — raw-only storage, simple DB actions, aggregate in the shared engine; closed **Q17.3** with pause/cap mitigations and a plain-Postgres fallback. Status table + Decision Log updated. |
 | v0.11 | 2026-08-17 | 2.1, 2.2, 2.3, 3.3, 21, 22 | **Scoring model fully closed (Q2.8a–f).** Non-negative points defined per field per phase; success = points > 0; scouted score = sum of field points (match/alliance total = sum across robots); no alliance-level bonus points. Updated glossary + §2.2, struck the Q2.8 sub-questions, refreshed the §3.3 forward-reference; Decision Log row added. |
 | v0.13 | 2026-08-18 | 0, 0.2, 4.1, 4.2, 21, 22, 23 | **Topic 4 CLOSED.** Answered Q4.2/Q4.4/Q4.5. No event types — every event is a regular flat event (`type` dropped). Events weighted **equally** across a season (no event-level recency). **No external import in v1** — no data-import path, no `source` field on entries. Events model trimmed to `events(id, season_id, name, code?, is_active)`: `code` nullable/unused (reserved for the deferred TBA import, §24); `start_date`/`end_date`/`location` removed. Aggregation scopes adopted. Folded §4.2 proposals into §4.1 confirmed; renumbered old §4.3 → §4.2. Status table + Decision Log + open-questions index updated. |
+| v0.14 | 2026-08-18 | 0, 0.2, 5 (rewritten), 10.2, 10.3, 17.1, 21, 22 | **Topic 5 CLOSED.** Answered Q5.1–Q5.8. Three global roles (scouter/lead/admin), no viewer/mentor, not per-event; confirmed permission matrix (§5.2). Form templates admin-only, entries open to all (reaffirms Q3.1/Q3.7). Admin-provisioned username+password; admin-only user create/delete/promote-demote; deletion preserves authored content. Scouters self-edit own entries for 5 min from creation, then the row locks — same offline & online, ~30-day offline session (decided-by-Claude); switch-scouter + per-entry attribution; no user audit log. **Dropped DB-level RLS/per-row policies and the privileged-action audit-log target — authorization now lives in the server use-case layer + UI (§17.1 updated).** Lead-only ephemeral "draft statistics page" vs. admin-only saved dashboards. Decision Log (4 rows) + status table + open-questions index updated. Also recorded in Topic 10 the requested **static general statistics page** (operational/meta stats) alongside the dynamic robot dashboards, with candidate contents and new Q10.9. |
 | v0.12 | 2026-08-17 | 0.2, 1.1, 3.1, 3.3, 3.4, 4.1, 21, 22, 24 | **Topic 3 CLOSED.** Answered Q3.3–Q3.8; Q3.10 → §24. Field catalogue = all types except Photo (deferred); Timer editable-after-stop + nullable; Event log = timestamped taps; Field-position picker stores normalized 0–1 coords on the season game image with **per-field alliance normalization** (red raw / blue mirrored H/V/both, with preview). List-builder + live-preview UI (JSON behind advanced). **Main/active version + restorable snapshots; stats on the main version; missing-field metric → "cannot calculate this metric."** Form belongs to a **season** (several forms per season) — reconciled §1.1 and §4.1 wording from competition→form to season→form. Delete = **cascade behind a warning, admin-only.** Per-field `show_on_team_card`. **Removed the per-field offline flag — every field is scoutable offline.** Conditional logic kept; form-duplication dropped, JSON export/import kept. Status table + Decision Log updated; LLM metadata-suggestion added to §24. |
 
 ---
