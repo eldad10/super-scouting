@@ -37,6 +37,10 @@ Single working copy on `main` — no worktree copies. Every change is made in th
 
 Shorthand, defined in `COLLABORATION.md` section 3. Summary: `Q3.1 A` = pick option A · `y`/`n` = yes/no · `?` = explain first · `you pick` = use your recommendation and log it · `later` = park it · `skip` = out of scope · `nice` = add to the nice-to-have list (spec §24).
 
+## `tell-next`
+
+When I say **`tell-next`**: commit the current changes, then tell me the next task to start in a fresh chat — i.e. which spec topic to close next, which instructions/design document to prepare, or what to develop. Give the recommendation and the reason, briefly.
+
 ## When a spec topic closes
 
 Set its status to CLOSED in the status table, move proposals into confirmed requirements, add a Decision Log row **with rationale**, add a Change History row.

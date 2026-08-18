@@ -23,7 +23,7 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 |---|-------|--------|
 | 1 | Product vision & scope | CLOSED |
 | 2 | FRC domain model & glossary | CLOSED |
-| 3 | Dynamic forms — the core architecture decision | PARTIAL — Q3.1/Q3.2/Q3.9 closed |
+| 3 | Dynamic forms — the core architecture decision | CLOSED |
 | 4 | Seasons, competitions & events | PARTIAL — Q4.1/Q4.3 closed |
 | 5 | Users, roles, authentication & permissions | OPEN |
 | 6 | Scouting data entry (runtime UX) | OPEN |
@@ -56,7 +56,7 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 
 - A **scouting platform for an FRC team** that is **year-agnostic**: the app must never need a code change to support a new game season. Everything game-specific is configuration created inside the app.
 - The team can **create, edit and delete the data-collection forms** (which act as the "tables" representing each year's game) from inside the app UI.
-- Data is **organised by competition**, and each competition is linked to the form that represents the game being played.
+- Data is **organised by season and event**. **Forms belong to a season** (a season may hold several — match / super / …), and every event in that season uses them (Q3.6). *(amended 2026-08-17)*
 - Users can **search and analyse data per competition**, and also **aggregated across all competitions in the same year**.
 - Users can build **statistics and visualisation pages dynamically from the UI**, choosing chart types and pointing at specific form fields.
 - Separate **client** and **server** projects, in **one repository**, but as **two independently deployed services**.
@@ -176,6 +176,17 @@ You said "year-agnostic", which is right — but there is a set of concepts that
 - **Storage model: Option A — one `scouting_entries` table with a JSONB payload** (Q3.1). Per-form-version SQL views flatten the JSONB into typed columns for analytics; validators and casts are **generated from the field definitions**, not hand-written per form. *(confirmed 2026-08-14)*
 - **Immutable form versioning** (Q3.2). A new version is created only by *structural* changes — adding, removing/deprecating, or retyping a field. Editing a field's **label** or **range/min-max** happens in place and does **not** create a version; a range change applies to new entries only and **never retroactively invalidates data already collected**. Field `key`s are permanent. *(confirmed 2026-08-14)*
 - **Semantic field metadata captured at field-creation time** (Q3.9). `description`, `unit`, `phase` and `direction` are **required** per field; `category`, `expected_range`, `include_in_ai_context` are optional. It cannot be backfilled and it drives the generated validators/views, chart labels and default sort (and is the LLM data dictionary later). *(confirmed 2026-08-14)*
+- **Field type catalogue** (Q3.3). All catalogue types ship **except Photo** (deferred): Counter, Number, Toggle, Single select, Multi select, Rating, Short text, Long text, Timer, Event log, Field-position picker, Computed, Section. *(confirmed 2026-08-17)*
+  - **Timer** values are **editable after stop** (correct a late stop) and **nullable via an "unsure — no time" toggle** (submit no value instead of a wrong number).
+  - **Event log** records **timestamped taps** — scouter-defined event buttons, each tap stored as `{type, t}` where `t` is seconds from a "match start" tap; enables counts and cycle-time analysis; taps are deletable before submit.
+  - **Field-position picker** stores normalized `{x, y}` in 0–1 on the **season's uploaded game image** (one point or a list per entry). It carries **per-field alliance normalization**: the red alliance keeps raw coordinates; the blue alliance is mirrored — **horizontally, vertically, or both (configurable, with builder preview)** — so both alliances map to one canonical frame. This requires each entry to know its alliance. Shown in analytics as a heatmap/scatter over the game image.
+- **Form builder UI** (Q3.4). A **list-based builder + live-preview pane**; raw-JSON editing behind an "advanced" toggle. Design it cleanly. *(confirmed 2026-08-17)*
+- **Version model** (Q3.5). A form has one **main/active version** plus **restorable secondary version snapshots**. Statistics always compute against the **main version**; a metric that references a field **absent from the main version** renders **"cannot calculate this metric"** until it is fixed/edited. Entries collected under other versions still aggregate through shared field `key`s. *(confirmed 2026-08-17)*
+- **Form scope** (Q3.6). A **form belongs to a season**, not a competition. A season may hold several forms (match / super / …); every event in that season uses them. *(confirmed 2026-08-17)*
+- **Delete semantics** (Q3.7). Deleting a form is a **cascade delete behind an explicit warning**, available to the **admin only**. *(confirmed 2026-08-17)*
+- **Team-card flag** (Q3.8). Each field carries a **`show_on_team_card`** boolean so the strategy lead's quick team view is configurable per season rather than hard-coded. *(confirmed 2026-08-17)*
+- **Conditional logic.** Simple rules only — `show this field if <field> <op> <value>`. No form-duplication feature; export/import of a form definition as JSON is retained. *(confirmed 2026-08-17)*
+- **Every field is scoutable offline.** No per-field offline flag — offline is the normal operating mode, so all fields work offline. *(confirmed 2026-08-17)*
 
 ### 3.2 The three ways to build this
 
@@ -233,14 +244,14 @@ scouting_entries(
 | Rating | 1–5 stars or slider, for subjective scouting. |
 | Short text | Free text, indexed for search. |
 | Long text / notes | Comments. |
-| Timer / stopwatch | Accumulate time (e.g. time spent defending). |
-| Event log | Timestamped taps — enables cycle-time analysis. |
-| Field position picker | Tap on an image of the field, stores x/y. Great for shot-location heatmaps. |
-| Photo | Robot pictures, pit scouting. Needs Supabase Storage + offline queueing. |
+| Timer / stopwatch | Accumulate time (e.g. time spent defending). **Editable after stop; nullable via an "unsure" toggle.** |
+| Event log | Scouter-defined event buttons; each tap stored as `{type, t}` seconds from a "match start" tap. Enables cycle-time analysis. |
+| Field position picker | Tap the season's game image; stores normalized `{x,y}` (0–1). **Per-field alliance normalization: red = raw, blue = mirrored H/V/both (configurable, with preview).** Shot-location heatmaps. |
+| ~~Photo~~ | **Deferred — not in v1.** |
 | Computed | Read-only, derived from other fields by a formula. |
 | Section / header | Layout only, no data. |
 
-**Field configuration per field:** key, label, help text, type, required, default value, min/max, options list, section/page, display order, visibility condition, whether it appears in the quick summary, whether it is scoutable offline.
+**Field configuration per field:** key, label, help text, type, required, default value, min/max, options list, section/page, display order, visibility condition, whether it appears in the quick summary, **`show_on_team_card`** (Q3.8), and — for the field-position picker — the **alliance-normalization axis** (none / horizontal / vertical / both). *(No per-field offline flag — **every field is scoutable offline**.)*
 
 **Semantic metadata per field — added because of the MCP/LLM requirement (topic 20). [RAISED BY ME]**
 
@@ -262,20 +273,20 @@ This is a small addition to the form builder now and effectively impossible to b
 
 **Conditional logic:** simple rules only — `show this field if <field> <op> <value>`. Not a general expression language.
 
-**Form templates:** you can duplicate last year's form as a starting point, and export/import a form definition as JSON so it can be shared or version-controlled.
+**Form portability:** export/import a form definition as JSON so it can be shared or version-controlled. *(No "duplicate last year's form" feature — dropped Q3.3 close.)*
 
 ### 3.4 Open questions
 
 - ~~**Q3.1** — Do you accept **Option A (JSONB)**?~~ ✓ **CLOSED 2026-08-14: yes, Option A** (§3.1).
 - ~~**Q3.2** — Do you accept **immutable form versioning**?~~ ✓ **CLOSED 2026-08-14: yes; label/range edits in place** (§3.1).
-- **Q3.3** — Which field types from the catalogue above do you actually want, and is anything missing? Specifically: do you want **field-position picking** (tap the field diagram) and **event logs with timestamps** (for cycle times)? These are high value in FRC and non-trivial to build.
-- **Q3.4** — How is the form **built** in the UI? (a) a list-based builder — add field, pick type, configure, reorder by drag; (b) a visual WYSIWYG canvas with live preview; (c) raw JSON editor for power users, with a UI on top. I'd suggest (a) + live preview pane, plus (c) hidden behind an "advanced" toggle.
-- **Q3.5** — When you aggregate across an entire season and a form changed mid-season, what should happen to a metric whose field only exists in some versions? (a) exclude entries missing the field; (b) treat as zero; (c) refuse and warn the user; (d) require an explicit field-mapping when creating the metric.
-- **Q3.6** **[RAISED BY ME]** — Can the **same form be reused across several competitions** in a season (I assume yes — same game), and can **one competition have several forms** (match + pit + super)? I'm assuming a many-to-many link table. Confirm.
-- **Q3.7** **[RAISED BY ME]** — What does "**delete a form**" mean when it has thousands of entries? Options: block deletion, soft-archive (hidden but data preserved), or cascade delete behind a scary confirmation. I recommend archive-by-default with hard delete only for empty forms.
-- **Q3.8** **[RAISED BY ME]** — Do you want a per-field **"show on the live team card"** flag, so the strategy lead's quick view is configurable per year rather than hard-coded?
+- ~~**Q3.3** — Which field types do you want, incl. field-position picking and event logs?~~ ✓ **CLOSED 2026-08-17: full catalogue except Photo (deferred); position picker uses the season game image with per-field alliance normalization; timer editable + nullable; event log = timestamped taps** (§3.1).
+- ~~**Q3.4** — How is the form built in the UI?~~ ✓ **CLOSED 2026-08-17: list builder + live-preview pane; raw-JSON behind an advanced toggle** (§3.1).
+- ~~**Q3.5** — What happens to a metric whose field only exists in some versions?~~ ✓ **CLOSED 2026-08-17: one main/active version + restorable snapshots; stats run on the main version; a metric on a missing field shows "cannot calculate this metric"** (§3.1).
+- ~~**Q3.6** **[RAISED BY ME]** — Form↔competition relationship?~~ ✓ **CLOSED 2026-08-17: a form belongs to a season (not a competition); a season may hold several forms; all its events use them** (§3.1).
+- ~~**Q3.7** **[RAISED BY ME]** — What does "delete a form" mean?~~ ✓ **CLOSED 2026-08-17: cascade delete behind an explicit warning, admin-only** (§3.1).
+- ~~**Q3.8** **[RAISED BY ME]** — Per-field "show on team card" flag?~~ ✓ **CLOSED 2026-08-17: yes — `show_on_team_card` boolean per field** (§3.1).
 - ~~**Q3.9** **[RAISED BY ME]** — Do you accept the **semantic metadata** block as part of every field, and which attributes are required?~~ ✓ **CLOSED 2026-08-14: yes; description/unit/phase/direction required, rest optional** (§3.1).
-- **Q3.10** **[RAISED BY ME]** — Should the form builder be able to **suggest** this metadata with an LLM? You paste the game manual's scoring section, and it proposes fields with descriptions, units, ranges and directions, which you then edit. This makes creating a new season's form take minutes instead of an evening — and it's the cheapest possible payoff from the AI work. Interested?
+- ~~**Q3.10** **[RAISED BY ME]** — LLM-suggested field metadata from a pasted game manual?~~ ✓ **CLOSED 2026-08-17: wanted, deferred → §24 nice-to-have.**
 
 ---
 
@@ -283,9 +294,9 @@ This is a small addition to the form builder now and effectively impossible to b
 
 ### 4.1 Confirmed requirements
 
-- Data is organised by competition name.
-- Each competition is linked to the form representing that game.
-- Search/filter data by competition, and by all competitions within one year.
+- Data is organised by season and event name.
+- **Forms belong to a season**, not an individual event; every event in the season uses the season's form(s) (Q3.6). *(amended 2026-08-17)*
+- Search/filter data by event, and by all events within one season.
 - **Active context (season + event).** The app has one app-wide active context. The **admin sets the default** (the `is_active` event and its season; season only if no event exists yet) and the app always **opens to it**. *(Q4.1, confirmed 2026-08-17)*
 - A user may switch the season/event they are working in, but the switch is **session-only — not persisted**; reopening returns to the admin default. **Only the admin default is cached for offline use**; user overrides are never stored.
 - The active context governs **both what the user browses and which event new scouting entries attach to**. Because a wrong context silently misattributes data, the switcher lives on a **dedicated context/landing page the user deliberately opens — never in the always-visible header/nav** (§16).
@@ -927,6 +938,7 @@ Decisions get recorded here as topics close, so Claude Code (and future you) can
 | 2026-08-17 | 4 | **Championship divisions modelled as regular flat events; no division hierarchy** (Q4.3). | A division behaves like any other event for scouting; a hierarchy adds modelling cost with no scouting benefit. |
 | 2026-08-17 | 4 / 16 | **App-wide active context (season + event): admin sets the default the app opens to; user overrides are session-only and never saved; only the default is cached offline. Governs both browsing and new-entry attribution; switcher on a dedicated page, not the header** (Q4.1). | A wrong active event silently ruins data, so the switch is deliberate (off the main nav) and non-sticky (always returns to the admin default). Not persisting overrides also removes per-user context storage — less data, simpler DB. |
 | 2026-08-17 | 2 / 9 | **Scoring model fully specified (Q2.8a–f): non-negative points defined per field per phase; success = points > 0; scouted score = sum of field points (match/alliance total = sum across robots); no alliance-level bonus points.** | Simple, additive scoring the metric engine computes identically online/offline; success-as-points>0 avoids a second predicate to maintain; excluding penalties and alliance bonuses keeps per-robot attribution clean and matches what a scout can actually observe. |
+| 2026-08-17 | 3 | **Topic 3 CLOSED.** Field catalogue = all types except Photo (deferred); Timer editable-after-stop + nullable; Event log = timestamped taps; Field-position picker stores normalized 0–1 coords on the season game image with **per-field alliance normalization** (red raw, blue mirrored H/V/both, with builder preview). List-builder + live preview UI (JSON behind advanced). **Main/active version + restorable snapshots; stats run on the main version; a metric on a missing field shows "cannot calculate this metric."** A **form belongs to a season** (several forms per season, all its events use them). Delete = **cascade behind a warning, admin-only.** Per-field `show_on_team_card`. Conditional logic kept; form-duplication dropped, JSON export/import kept. LLM metadata-suggestion → §24. | Position data is meaningless without alliance framing, so normalization is captured at the field, not backfilled. One main version keeps statistics deterministic while snapshots preserve interpretability; a loud "cannot calculate" beats silently wrong aggregates. Form-per-season matches the FRC reality (one game a year) and simplifies the event→form link. Cascade-with-warning matches the team's own preference over soft-archive. |
 | 2026-08-17 | 17 | **Target the Supabase free tier: store raw entries only (no persisted scores/aggregates, no photos in v1), keep DB actions simple (plain views, no materialized views/heavy triggers/cron), aggregate in the shared engine** (Q17.3). | Keeps a season comfortably within free-tier size and avoids operational complexity students can't maintain. Offline-first + per-event exports insulate scouting from the free tier's inactivity pause and caps; if limits are ever hit, plain-Postgres portability (Neon/self-host) makes migration cheap. |
 
 ---
@@ -937,11 +949,11 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 
 **Closed 2026-08-14:** Q1.4, Q3.1, Q3.2, Q3.9, Q7.4, Q15.1, Q15.2, Q15.4, Q15.8, Q16.2 → confirmed requirements. Q14.1 → §24 nice-to-have.
 **Closed 2026-08-15:** Q1.1, Q1.2, Q1.3, Q1.5, Q1.6 → confirmed requirements (**topic 1 CLOSED**).
-**Closed 2026-08-17:** Q2.1 – Q2.7 → confirmed requirements (**topic 2 CLOSED**); Q2.9 closed (own robot = regular robot); Q4.3 closed (flat events, no division hierarchy). Q2.8a–f closed (scoring model fully specified; topic 9 implements); Q4.1 closed (active context); Q17.3 closed (Supabase free tier).
+**Closed 2026-08-17:** Q2.1 – Q2.7 → confirmed requirements (**topic 2 CLOSED**); Q2.9 closed (own robot = regular robot); Q4.3 closed (flat events, no division hierarchy). Q2.8a–f closed (scoring model fully specified; topic 9 implements); Q4.1 closed (active context); Q17.3 closed (Supabase free tier). **Q3.3 – Q3.8 closed and Q3.10 → §24 (topic 3 CLOSED).**
 
 - ~~**Topic 1:** Q1.1 – Q1.6~~ ✓ **CLOSED** — all confirmed in §1.1.
 - ~~**Topic 2:** Q2.1 – Q2.7~~ ✓ **CLOSED** — confirmed in §2. Own robot = regular robot (Q2.9 closed). Scoring model fully specified (Q2.8a–f closed); topic 9 implements.
-- **Topic 3:** Q3.1 – Q3.10
+- ~~**Topic 3:** Q3.1 – Q3.10~~ ✓ **CLOSED** — confirmed in §3.1. Q3.10 → §24 nice-to-have.
 - **Topic 4:** Q4.2, Q4.4, Q4.5 — ~~Q4.1~~ ✓ CLOSED (active context), ~~Q4.3~~ ✓ CLOSED (flat events) 2026-08-17
 - **Topic 5:** Q5.1 – Q5.8
 - **Topic 6:** Q6.1 – Q6.8
@@ -970,7 +982,7 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 6. ~~**Q1.4** — Single team or multi-team?~~ ✓ **CLOSED: single team.**
 7. ~~**Q14.1** — External API import?~~ ✓ **CLOSED: wanted, deferred → §24 nice-to-have.**
 
-All seven top blockers are now closed. Next-tier durable questions still open: Q3.7 (delete-form semantics), Q9.4 (duplicate-scout resolution), Q6.5 (dead-robot status), Q5.2 (scouter login).
+All seven top blockers are now closed, and **topic 3 is fully CLOSED**. Next-tier durable questions still open: Q9.4 (duplicate-scout resolution), Q6.5 (dead-robot status), Q5.2 (scouter login).
 
 ---
 
@@ -991,6 +1003,7 @@ Every edit is logged here so changes can be audited without reprinting the docum
 | v0.9 | 2026-08-17 | 0.2, 1.1, 2.1, 2.2, 2.3, 3.3, 4.3, 21, 22 | **Topic 2 CLOSED.** Answered Q2.1–Q2.9. Event = name+year, Team = number+name. Scoring model confirmed as **points entered inline per field but stored in a separately-versioned model; entries hold raw data, score is derived; a scoring change is never a new form version** (Q2.8d closed; Q2.8a–c/e/f spun out to topics 3/9). Own robot is a **regular robot** — no separate log (Q2.9). Form kinds cut to match+super; scout all 6 robots incl. ours; no per-alliance data; official results reserved-nullable with a no-empty-box UI rule; practice/playoff excluded from metrics. Also closed **Q4.3** — championship divisions are regular flat events, no hierarchy (topic 4 → PARTIAL; §1.1 rationale amended). Added a forward-reference in §3.3. Decision Log + status table updated. |
 | v0.10 | 2026-08-17 | 0.2, 4.1, 4.3, 16.1, 17.1, 17.2, 21, 22 | Added the **app-wide active context** — admin sets the default the app opens to; user overrides are session-only (not saved); only the default is cached offline; governs browsing + new-entry attribution; switcher on a dedicated page, not the header. Closed **Q4.1**, cross-noted in §16.1. Adopted the **Supabase free tier** as an explicit constraint — raw-only storage, simple DB actions, aggregate in the shared engine; closed **Q17.3** with pause/cap mitigations and a plain-Postgres fallback. Status table + Decision Log updated. |
 | v0.11 | 2026-08-17 | 2.1, 2.2, 2.3, 3.3, 21, 22 | **Scoring model fully closed (Q2.8a–f).** Non-negative points defined per field per phase; success = points > 0; scouted score = sum of field points (match/alliance total = sum across robots); no alliance-level bonus points. Updated glossary + §2.2, struck the Q2.8 sub-questions, refreshed the §3.3 forward-reference; Decision Log row added. |
+| v0.12 | 2026-08-17 | 0.2, 1.1, 3.1, 3.3, 3.4, 4.1, 21, 22, 24 | **Topic 3 CLOSED.** Answered Q3.3–Q3.8; Q3.10 → §24. Field catalogue = all types except Photo (deferred); Timer editable-after-stop + nullable; Event log = timestamped taps; Field-position picker stores normalized 0–1 coords on the season game image with **per-field alliance normalization** (red raw / blue mirrored H/V/both, with preview). List-builder + live-preview UI (JSON behind advanced). **Main/active version + restorable snapshots; stats on the main version; missing-field metric → "cannot calculate this metric."** Form belongs to a **season** (several forms per season) — reconciled §1.1 and §4.1 wording from competition→form to season→form. Delete = **cascade behind a warning, admin-only.** Per-field `show_on_team_card`. **Removed the per-field offline flag — every field is scoutable offline.** Conditional logic kept; form-duplication dropped, JSON export/import kept. Status table + Decision Log updated; LLM metadata-suggestion added to §24. |
 
 ---
 
@@ -1003,3 +1016,4 @@ Confirmed as **wanted but deliberately out of current scope** — revisit later.
 | **External data import (TBA / FRC Events API)** — event, team, schedule and result import | Q14.1, topic 14 | Wanted, not now. Deferring it also defers schedule-driven **scouter assignments** (Q6.1/Q6.2) and **official-result validation** (topic 13), which depend on it. |
 | **Cross-device live updates (Supabase Realtime)** — another device's changes appearing without a refresh | Q15.1, topic 8 | Optimistic local UI and refresh-on-triggers ship now; automatic cross-device push is deferred. Additive later given the all-through-server model. |
 | **In-app AI insights panel** — server-side LLM orchestration, in-app chat/insights UI, cached briefings, notes summarisation, NL-to-chart | Topic 20 (approach B), phase 6 | Wanted, not now. Requires internet so unavailable at most of a competition; generated insights would be cached for offline reading. The setup-only prerequisites (semantic field metadata §3, use-case layer §15) stay in phase 1. **MCP server (phase 5) is *not* here — it stays parked in topic 20.** |
+| **LLM-suggested field metadata** — paste the game manual's scoring section, get proposed fields with descriptions/units/ranges/directions to edit | Q3.10, topic 3 | Wanted, not now. Turns building a new season's form from an evening into minutes; cheapest payoff of the AI work. Depends on the same LLM connection deferred in topic 20. |
