@@ -1,7 +1,7 @@
 # FRC Scouting Platform — Design Specification (Living Document)
 
 **Status:** DRAFT v0.8 — topic 1 CLOSED; core architecture forks decided (storage, versioning, offline stats, stack, access model, language). Remaining topics OPEN/PARTIAL pending their sub-questions.
-**Last updated:** 2026-08-15
+**Last updated:** 2026-08-18
 **Owner:** (your name / team number)
 **Destination:** this document, once all topics are CLOSED, becomes the input spec for Claude Code to generate an implementation plan.
 
@@ -24,7 +24,7 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 | 1 | Product vision & scope | CLOSED |
 | 2 | FRC domain model & glossary | CLOSED |
 | 3 | Dynamic forms — the core architecture decision | CLOSED |
-| 4 | Seasons, competitions & events | PARTIAL — Q4.1/Q4.3 closed |
+| 4 | Seasons, competitions & events | CLOSED |
 | 5 | Users, roles, authentication & permissions | OPEN |
 | 6 | Scouting data entry (runtime UX) | OPEN |
 | 7 | Offline-first & synchronisation | PARTIAL — Q7.4 closed |
@@ -300,21 +300,19 @@ This is a small addition to the form builder now and effectively impossible to b
 - **Active context (season + event).** The app has one app-wide active context. The **admin sets the default** (the `is_active` event and its season; season only if no event exists yet) and the app always **opens to it**. *(Q4.1, confirmed 2026-08-17)*
 - A user may switch the season/event they are working in, but the switch is **session-only — not persisted**; reopening returns to the admin default. **Only the admin default is cached for offline use**; user overrides are never stored.
 - The active context governs **both what the user browses and which event new scouting entries attach to**. Because a wrong context silently misattributes data, the switcher lives on a **dedicated context/landing page the user deliberately opens — never in the always-visible header/nav** (§16).
+- **No event types — every event is a regular flat event** (Q4.2). No `type` field: district event, championship division, off-season and internal scrimmage are all just events (consistent with Q4.3, no division hierarchy). *(confirmed 2026-08-18)*
+- **Events are weighted equally when aggregating across a season** (Q4.4). No event-level recency/weighting — a later event does not count more than an earlier one. *(confirmed 2026-08-18)*
+- **No external data import in v1** (Q4.5). We do not import another team's data or scout from a stream, so there is **no data-import path and no `source` field on entries**. (Distinct from the deferred TBA/FRC schedule/result import — Q14.1, §24.) *(confirmed 2026-08-18)*
+- **Data model** (Q4.2 close): `seasons(year, game_name, field_image_url)` → `events(id, season_id, name, code?, is_active)`. `code` (the official event key, e.g. `2026isde1`) is **nullable and unused for now** — reserved only for the deferred TBA import (§24); `type`, `start_date`, `end_date` and `location` are **not modelled** (no import populates them). *(confirmed 2026-08-18)*
+- **Aggregation scopes available everywhere:** single event, season (all events), multi-season / all-time, and a custom set of events. *(confirmed 2026-08-18)*
 
-### 4.2 Proposed decisions
-
-- `seasons(year, game_name, field_image_url)` → `events(id, season_id, name, code, type, start_date, end_date, location, is_active)`.
-- An **"active event"** concept: the app knows which event is happening now so scouters land directly on the right data-entry screen with the event pre-selected. Getting the wrong event selected is a classic source of ruined data.
-- Event `code` maps to the official event key (e.g. TBA's `2026isde1`) to enable schedule import in topic 14.
-- Aggregation scopes available everywhere: **single event**, **season (all events)**, **multi-season / all time**, and **custom set of events**.
-
-### 4.3 Open questions
+### 4.2 Open questions
 
 - ~~**Q4.1**~~ ✓ **CLOSED 2026-08-17:** global admin-set default context (season + event); users may override for the **session only** (not saved; only the default is cached offline); switcher on a dedicated page, not the header (§4.1, §16).
-- **Q4.2** — Event types you need: official district event, regional, championship (with divisions), off-season event, internal scrimmage, practice day. Which of these matter?
+- ~~**Q4.2**~~ ✓ **CLOSED 2026-08-18:** no event types — every event is a regular flat event; `type` field dropped.
 - ~~**Q4.3**~~ ✓ **CLOSED 2026-08-17:** flat event list — a championship division is just a regular event; no division hierarchy modelled.
-- **Q4.4** — When comparing across a season, should events be **weighted** or treated equally? (E.g. later events reflect an improved robot — do you want recency weighting in stats? See also Q9.6.)
-- **Q4.5** **[RAISED BY ME]** — Do you need to scout **teams you will never play** (e.g. importing another team's shared data, or scouting from a stream before an event)? That implies a data-import path and a "source" field on entries.
+- ~~**Q4.4**~~ ✓ **CLOSED 2026-08-18:** events weighted **equally** across a season; no event-level recency weighting.
+- ~~**Q4.5**~~ ✓ **CLOSED 2026-08-18:** no external import in v1 — no data-import path, no `source` field on entries. `code` kept nullable; `start_date`/`end_date`/`location`/`type` dropped from the events model.
 
 ---
 
@@ -939,6 +937,7 @@ Decisions get recorded here as topics close, so Claude Code (and future you) can
 | 2026-08-17 | 4 / 16 | **App-wide active context (season + event): admin sets the default the app opens to; user overrides are session-only and never saved; only the default is cached offline. Governs both browsing and new-entry attribution; switcher on a dedicated page, not the header** (Q4.1). | A wrong active event silently ruins data, so the switch is deliberate (off the main nav) and non-sticky (always returns to the admin default). Not persisting overrides also removes per-user context storage — less data, simpler DB. |
 | 2026-08-17 | 2 / 9 | **Scoring model fully specified (Q2.8a–f): non-negative points defined per field per phase; success = points > 0; scouted score = sum of field points (match/alliance total = sum across robots); no alliance-level bonus points.** | Simple, additive scoring the metric engine computes identically online/offline; success-as-points>0 avoids a second predicate to maintain; excluding penalties and alliance bonuses keeps per-robot attribution clean and matches what a scout can actually observe. |
 | 2026-08-17 | 3 | **Topic 3 CLOSED.** Field catalogue = all types except Photo (deferred); Timer editable-after-stop + nullable; Event log = timestamped taps; Field-position picker stores normalized 0–1 coords on the season game image with **per-field alliance normalization** (red raw, blue mirrored H/V/both, with builder preview). List-builder + live preview UI (JSON behind advanced). **Main/active version + restorable snapshots; stats run on the main version; a metric on a missing field shows "cannot calculate this metric."** A **form belongs to a season** (several forms per season, all its events use them). Delete = **cascade behind a warning, admin-only.** Per-field `show_on_team_card`. Conditional logic kept; form-duplication dropped, JSON export/import kept. LLM metadata-suggestion → §24. | Position data is meaningless without alliance framing, so normalization is captured at the field, not backfilled. One main version keeps statistics deterministic while snapshots preserve interpretability; a loud "cannot calculate" beats silently wrong aggregates. Form-per-season matches the FRC reality (one game a year) and simplifies the event→form link. Cascade-with-warning matches the team's own preference over soft-archive. |
+| 2026-08-18 | 4 | **Topic 4 CLOSED.** No event types — every event is a regular flat event (`type` dropped, Q4.2). Events weighted **equally** across a season, no event-level recency (Q4.4). **No external import in v1** — no data-import path, no `source` field on entries (Q4.5). Events model = `events(id, season_id, name, code?, is_active)`: `code` nullable and unused (reserved for deferred TBA import, §24); `start_date`/`end_date`/`location` dropped. Aggregation scopes (single event / season / all-time / custom set) adopted. | All the team's events behave identically for scouting, so a `type` field and division hierarchy add modelling cost with no benefit. Equal weighting matches how the team reasons about a season and avoids a tunable nobody would maintain. Since no data is imported, the import-only columns (`type`/dates/`location`/`source`) are dead schema — dropping them keeps the model minimal; `code` stays nullable so the deferred TBA import needs no migration. |
 | 2026-08-17 | 17 | **Target the Supabase free tier: store raw entries only (no persisted scores/aggregates, no photos in v1), keep DB actions simple (plain views, no materialized views/heavy triggers/cron), aggregate in the shared engine** (Q17.3). | Keeps a season comfortably within free-tier size and avoids operational complexity students can't maintain. Offline-first + per-event exports insulate scouting from the free tier's inactivity pause and caps; if limits are ever hit, plain-Postgres portability (Neon/self-host) makes migration cheap. |
 
 ---
@@ -950,11 +949,12 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 **Closed 2026-08-14:** Q1.4, Q3.1, Q3.2, Q3.9, Q7.4, Q15.1, Q15.2, Q15.4, Q15.8, Q16.2 → confirmed requirements. Q14.1 → §24 nice-to-have.
 **Closed 2026-08-15:** Q1.1, Q1.2, Q1.3, Q1.5, Q1.6 → confirmed requirements (**topic 1 CLOSED**).
 **Closed 2026-08-17:** Q2.1 – Q2.7 → confirmed requirements (**topic 2 CLOSED**); Q2.9 closed (own robot = regular robot); Q4.3 closed (flat events, no division hierarchy). Q2.8a–f closed (scoring model fully specified; topic 9 implements); Q4.1 closed (active context); Q17.3 closed (Supabase free tier). **Q3.3 – Q3.8 closed and Q3.10 → §24 (topic 3 CLOSED).**
+**Closed 2026-08-18:** Q4.2 (no event types), Q4.4 (equal event weighting), Q4.5 (no external import / no `source` field) → confirmed requirements (**topic 4 CLOSED**).
 
 - ~~**Topic 1:** Q1.1 – Q1.6~~ ✓ **CLOSED** — all confirmed in §1.1.
 - ~~**Topic 2:** Q2.1 – Q2.7~~ ✓ **CLOSED** — confirmed in §2. Own robot = regular robot (Q2.9 closed). Scoring model fully specified (Q2.8a–f closed); topic 9 implements.
 - ~~**Topic 3:** Q3.1 – Q3.10~~ ✓ **CLOSED** — confirmed in §3.1. Q3.10 → §24 nice-to-have.
-- **Topic 4:** Q4.2, Q4.4, Q4.5 — ~~Q4.1~~ ✓ CLOSED (active context), ~~Q4.3~~ ✓ CLOSED (flat events) 2026-08-17
+- ~~**Topic 4:** Q4.1 – Q4.5~~ ✓ **CLOSED** — confirmed in §4.1. Active context (Q4.1) + flat events (Q4.3) 2026-08-17; no event types (Q4.2), equal event weighting (Q4.4), no external import / no `source` field (Q4.5) 2026-08-18.
 - **Topic 5:** Q5.1 – Q5.8
 - **Topic 6:** Q6.1 – Q6.8
 - **Topic 7:** Q7.1 – Q7.7
@@ -1003,6 +1003,7 @@ Every edit is logged here so changes can be audited without reprinting the docum
 | v0.9 | 2026-08-17 | 0.2, 1.1, 2.1, 2.2, 2.3, 3.3, 4.3, 21, 22 | **Topic 2 CLOSED.** Answered Q2.1–Q2.9. Event = name+year, Team = number+name. Scoring model confirmed as **points entered inline per field but stored in a separately-versioned model; entries hold raw data, score is derived; a scoring change is never a new form version** (Q2.8d closed; Q2.8a–c/e/f spun out to topics 3/9). Own robot is a **regular robot** — no separate log (Q2.9). Form kinds cut to match+super; scout all 6 robots incl. ours; no per-alliance data; official results reserved-nullable with a no-empty-box UI rule; practice/playoff excluded from metrics. Also closed **Q4.3** — championship divisions are regular flat events, no hierarchy (topic 4 → PARTIAL; §1.1 rationale amended). Added a forward-reference in §3.3. Decision Log + status table updated. |
 | v0.10 | 2026-08-17 | 0.2, 4.1, 4.3, 16.1, 17.1, 17.2, 21, 22 | Added the **app-wide active context** — admin sets the default the app opens to; user overrides are session-only (not saved); only the default is cached offline; governs browsing + new-entry attribution; switcher on a dedicated page, not the header. Closed **Q4.1**, cross-noted in §16.1. Adopted the **Supabase free tier** as an explicit constraint — raw-only storage, simple DB actions, aggregate in the shared engine; closed **Q17.3** with pause/cap mitigations and a plain-Postgres fallback. Status table + Decision Log updated. |
 | v0.11 | 2026-08-17 | 2.1, 2.2, 2.3, 3.3, 21, 22 | **Scoring model fully closed (Q2.8a–f).** Non-negative points defined per field per phase; success = points > 0; scouted score = sum of field points (match/alliance total = sum across robots); no alliance-level bonus points. Updated glossary + §2.2, struck the Q2.8 sub-questions, refreshed the §3.3 forward-reference; Decision Log row added. |
+| v0.13 | 2026-08-18 | 0, 0.2, 4.1, 4.2, 21, 22, 23 | **Topic 4 CLOSED.** Answered Q4.2/Q4.4/Q4.5. No event types — every event is a regular flat event (`type` dropped). Events weighted **equally** across a season (no event-level recency). **No external import in v1** — no data-import path, no `source` field on entries. Events model trimmed to `events(id, season_id, name, code?, is_active)`: `code` nullable/unused (reserved for the deferred TBA import, §24); `start_date`/`end_date`/`location` removed. Aggregation scopes adopted. Folded §4.2 proposals into §4.1 confirmed; renumbered old §4.3 → §4.2. Status table + Decision Log + open-questions index updated. |
 | v0.12 | 2026-08-17 | 0.2, 1.1, 3.1, 3.3, 3.4, 4.1, 21, 22, 24 | **Topic 3 CLOSED.** Answered Q3.3–Q3.8; Q3.10 → §24. Field catalogue = all types except Photo (deferred); Timer editable-after-stop + nullable; Event log = timestamped taps; Field-position picker stores normalized 0–1 coords on the season game image with **per-field alliance normalization** (red raw / blue mirrored H/V/both, with preview). List-builder + live-preview UI (JSON behind advanced). **Main/active version + restorable snapshots; stats on the main version; missing-field metric → "cannot calculate this metric."** Form belongs to a **season** (several forms per season) — reconciled §1.1 and §4.1 wording from competition→form to season→form. Delete = **cascade behind a warning, admin-only.** Per-field `show_on_team_card`. **Removed the per-field offline flag — every field is scoutable offline.** Conditional logic kept; form-duplication dropped, JSON export/import kept. Status table + Decision Log updated; LLM metadata-suggestion added to §24. |
 
 ---
