@@ -2,7 +2,7 @@
 
 **Purpose:** hand this file to Claude at the start of every session, alongside `frc-scouting-app-spec.md`. It tells Claude how to behave, tells you how to answer efficiently, and defines the rules for the build phase. It exists to stop us re-negotiating process every time and to keep token usage low across what will be a long project.
 
-**Version:** 1.2 · **Created:** 2026-08-12 · **Updated:** 2026-08-14 (added section 11: branch-per-chat workflow; `nice` shorthand in section 3)
+**Version:** 1.3 · **Created:** 2026-08-12 · **Updated:** 2026-08-31 (section 11 rewritten for the `develop`/`main` branch model; CI rule added to section 8)
 
 ---
 
@@ -176,6 +176,7 @@ For the build phase. These are non-negotiable defaults; override deliberately, n
 7. **Export before every event.** One-click backup of the season's data, saved somewhere off-platform. A weekend of scouting must never be recoverable only from one Supabase project.
 8. **Secrets discipline.** Service-role keys and external API keys exist only in the server's environment variables. Never in the client, never in the repo.
 9. **Verify before claiming done.** Run the command, read the output, then say it works.
+10. **CI is the gate on `main`.** Every push to `develop` runs lint, typecheck, the unit tests and a build of both apps; a pull request into `main` does not merge unless that run is green. The two test suites that are not optional are the **metric engine** and the **offline sync/conflict protocol** — see spec §18.1.
 
 ---
 
@@ -279,11 +280,19 @@ Don't blanket-approve everything on day one. Let it ask, and approve patterns as
 
 ## 11. Session workflow (branch per chat)
 
-How we run each working session in this repo. It supersedes the worktree setup — **there is one working copy, on `master`; every change is made in the repo itself on a branch, never on a copy.**
+How we run each working session in this repo. It supersedes the worktree setup — **there is one working copy; every change is made in the repo itself on a branch, never on a copy.**
 
-1. **Start.** I open a session by giving you the requirements or topics for this chat. Before you edit anything, ask me to open a new branch for the work (named for the topic, e.g. `spec/offline-sync` or `feat/form-builder`). All of this chat's commits go on that branch.
+**Branch model** *(set 2026-08-31, topic 15 close)*
+
+| Branch | Role |
+|---|---|
+| `main` | Deployable / production. Only ever receives reviewed, CI-green merges. |
+| `develop` | Integration. Every push here runs CI (lint, typecheck, tests, build). |
+| `spec/<topic>`, `feat/<thing>` | One per working session. Cut from `develop`, merged back into `develop`. |
+
+1. **Start.** I open a session by giving you the requirements or topics for this chat. Before you edit anything, ask me to open a new branch for the work, cut from `develop` (e.g. `spec/offline-sync` or `feat/form-builder`). All of this chat's commits go on that branch.
 2. **During.** When we discuss a new feature, decision, or gotcha that isn't captured in the spec, finish your answer by asking whether to add it to `frc-scouting-app-spec.md`. Don't silently add it, and don't silently drop it.
-3. **End.** When I say we're finished, push the branch and open a merge request into `master`. Don't merge it yourself unless I tell you to; I review the MR, then it merges.
-4. **One copy.** Never create a second checkout/worktree of the spec. If you ever find edits landing in a duplicate path, stop and consolidate onto `master`.
+3. **End.** When I say we're finished, push the branch and open a merge request **into `develop`**. Don't merge it yourself unless I tell you to; I review the MR, then it merges. Promotion from `develop` to `main` is a separate, deliberate step and requires CI green.
+4. **One copy.** Never create a second checkout/worktree of the spec. If you ever find edits landing in a duplicate path, stop and consolidate.
 
-*Step 3 needs a git remote (e.g. GitHub) — none is configured yet; set one up before the first "we're finished".*
+*During the spec phase there is no code and therefore nothing for CI to run; `develop` becomes the working integration branch once the repo is scaffolded in phase 0 (spec §19.1). Until then, spec branches may merge straight into `main`.*
