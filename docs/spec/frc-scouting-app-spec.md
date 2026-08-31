@@ -1,7 +1,7 @@
 # FRC Scouting Platform — Design Specification (Living Document)
 
-**Status:** DRAFT v0.20 — topics 1–10 CLOSED; core architecture forks decided (storage, versioning, offline stats, stack, access model, language, roles/auth, data-entry UX, offline-first & sync, realtime deferred → 45s refresh, dashboards & visualisation). Remaining topics OPEN/PARTIAL pending their sub-questions.
-**Last updated:** 2026-08-18
+**Status:** DRAFT v0.24 — **topics 1–13 CLOSED** (every feature topic). Core architecture forks decided (storage, versioning, offline stats, stack, access model, language, roles/auth, data-entry UX, offline-first & sync, realtime deferred → 45s refresh, dashboards & visualisation, search/ranking/browse, data quality, alliance selection). Remaining: 14 (formal close of the deferred TBA import), 18, 19, and the partials 15/16/17/20.
+**Last updated:** 2026-08-31
 **Owner:** (your name / team number)
 **Destination:** this document, once all topics are CLOSED, becomes the input spec for Claude Code to generate an implementation plan.
 
@@ -32,7 +32,7 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 | 9 | Statistics engine & computed metrics | CLOSED |
 | 10 | Dynamic dashboards, graphs & visualisations | CLOSED |
 | 11 | Search, ranking & browse | CLOSED |
-| 12 | Alliance selection & pick list | OPEN |
+| 12 | Alliance selection & pick list | CLOSED |
 | 13 | Data quality, integrity & scouter reliability | CLOSED |
 | 14 | External data integration (TBA / FRC Events API) | OPEN |
 | 15 | System architecture, repo layout & services | PARTIAL — Q15.1/Q15.2/Q15.4/Q15.8 closed |
@@ -343,10 +343,12 @@ This is a small addition to the form builder now and effectively impossible to b
 | Log in; view all data (stats, dashboards, teams, forms, entries) | ✓ | ✓ | ✓ |
 | Submit scouting entries; edit **own** entries (≤ 5 min, then locked) | ✓ | ✓ | ✓ |
 | Manage **all** entries (edit / fix / reassign / soft-delete others') | — | ✓ | ✓ |
+| Add a team to the **do-not-pick** list (reason required); may not edit or remove one (§12.2) | — | ✓ | ✓ |
 | Create a **draft statistics page** on the active competition (session-only, not saved, discarded on exit) | — | ✓ | ✓ |
 | Create / edit / **save** statistics & dashboards (persistent) | — | — | ✓ |
 | Create / upload / edit / delete **form templates** | — | — | ✓ |
 | Manage events & the active-context default (§4.1) | — | — | ✓ |
+| Build / reorder **pick lists**; edit or remove do-not-pick entries; record the **alliance bracket** (§12.2) | — | — | ✓ |
 | Create / delete users; promote / demote roles | — | — | ✓ |
 
 The **draft statistics page** (Lead) is an ephemeral dashboard scoped to the current active competition: built during a session, viewable live, **never persisted to the database**, and discarded on **exit — defined as logout or closing the app/tab**. It is held in session-scoped memory, so it **survives navigation between pages within the session** but is gone once the lead logs out or the app closes (and can be dismissed manually). Persistent/saved statistics are admin-only. See Topic 10 (§10.2) for the dashboard mechanics; this fixes only who may create ephemeral vs. saved ones.
@@ -428,7 +430,7 @@ Consequences we should decide on:
   - **Divergence** — base is stale (two edits branched from the same ancestor on different devices): a **genuine conflict** → keep the **latest as the live value** so the app stays usable, **preserve the superseded version**, and flag the row for review. No automatic field-level merge. **The "review conflicts" screen requires a human decision from a lead *or* an admin** (both roles can resolve; a scouter cannot) — a flagged conflict is not considered settled until one of them acts.
 
   For form definitions, offline admin edits are **not allowed** — form changes require connectivity (avoiding two divergent form schemas). *(Q7.5, refined 2026-08-19.)*
-- **Editable offline:** **scouting entries** (create + 5-min self-edit) and the **admin-only pick list** (syncs through the same outbox).
+- **Editable offline:** **scouting entries** (create + 5-min self-edit) and the **alliance-selection surfaces** — the admin-only **pick lists** and **alliance bracket**, plus a **lead's do-not-pick addition** — all syncing through the same outbox. *(Extended on Topic 12 close, §12.2.)* A pick-list **reorder** is a single operation stamped with the list's own version, not a per-row write (§12.2).
 - **Statistics offline:** the **main statistics page works offline for viewing** — rankings and metrics are computed on-device from the raw entries — but **cannot be edited offline**. A lead's **draft statistics page can be created offline** and, as always, is **discarded on exit** (§5.2). **Saving** a persistent admin dashboard needs connectivity; a saved dashboard is viewable from cache offline but is built/edited only online. Offline stats naturally reflect only the entries the device currently holds — they become complete once it has gathered the others (sync or QR).
 - **Not editable offline:** form definitions and user management.
 - **Offline dataset — the full active competition, and it fits easily.** Offline analysis needs the real source data on the device: **all active-competition forms/versions, the user list, and every raw scouting entry** (the "statistics details"). **Nothing is pre-computed** — the on-device shared engine calculates each metric from the raw entries (matches §17.1: store raw, aggregate on the client). Feasibility is not a concern: with **no photos** (position fields store only normalized x,y coordinates), one event is a **few MB of JSON** (~600 match entries × ~1–2 KB plus super-scouting) — far within IndexedDB's limits, so it loads and indexes fast. The cache is bounded to the **active competition only** — no multi-season/multi-event bulk is held on-device.
@@ -442,7 +444,7 @@ Consequences we should decide on:
 
 - ~~**Q7.1** — Is QR-code transfer in scope for v1 or later?~~ ✓ **CLOSED 2026-08-19: in v1, as an animated + compressed multi-frame QR** (§7.3).
 - ~~**Q7.2** — Any realistic connectivity at your events?~~ ✓ **CLOSED 2026-08-19: yes, outside the arena** — one tablet is walked out to sync every few games; QR feeds that tablet inside (§7.3).
-- ~~**Q7.3** — Which entities must be editable offline?~~ ✓ **CLOSED 2026-08-19: scouting entries + pick list (admin-only)** editable offline; form defs / user mgmt / persisting dashboards not — but a lead's ephemeral draft stats page does work offline (§7.3).
+- ~~**Q7.3** — Which entities must be editable offline?~~ ✓ **CLOSED 2026-08-19: scouting entries + pick list (admin-only)** editable offline; form defs / user mgmt / persisting dashboards not — but a lead's ephemeral draft stats page does work offline (§7.3). *(Topic 12 close extends the offline-editable set to the do-not-pick list and the alliance bracket, and allows a lead's do-not-pick addition offline — §12.2.)*
 - ~~**Q7.4** — Should statistics and charts be computed on-device while offline?~~ ✓ **CLOSED 2026-08-14: yes — shared TS metric engine runs in the browser** (§7.1).
 - ~~**Q7.5** — When two devices edited the same entry, who wins?~~ ✓ **CLOSED 2026-08-19: last-write-wins live via base-version check; only genuine divergence is flagged for lead/admin review, superseded version preserved** (§7.3).
 - ~~**Q7.6** **[RAISED BY ME]** — Device-to-device sync on a local network?~~ → **§24 nice-to-have** (local-network hub, no internet; not USB).
@@ -466,7 +468,7 @@ Consequences we should decide on:
 - ~~**Q8.3** **[RAISED BY ME]** — Presence (who's online / who hasn't submitted)?~~ → **§24 nice-to-have.**
 - ~~**Q8.4** **[RAISED BY ME]** — Notifications?~~ → **§24 nice-to-have** (in-app vs. push decided then).
 
-> **Dependency note:** §12's proposed **live cross-off** during alliance selection assumes realtime; with realtime deferred it updates on the 45-second refresh / manual refresh in v1. The final call stays with Topic 12.
+> **Dependency note — RESOLVED 2026-08-31 (Topic 12 close):** §12's **live cross-off** is instant on the **admin's own device** (optimistic local write), reaches **online viewers on the 45-second auto-refresh** or a manual refresh, and offline viewers only on sync. Because the pick list is **single-editor (admin-only)**, **the admin's device is the declared source of truth during alliance selection** and every other screen is advisory (§12.2).
 
 ---
 
@@ -692,23 +694,83 @@ Each of these is a **built-in dashboard**. It is reachable **in-context from its
 
 ## 12. Alliance selection & pick list
 
+**Status: CLOSED 2026-08-31 (Q12.1–Q12.3).** §12.1 keeps the rationale; §12.2 holds the confirmed decisions; §12.3 the data model; §12.4 the page design; §12.5 the closed questions.
+
 ### 12.1 Why I'm raising this **[RAISED BY ME]**
 
 You didn't mention it, but it's the reason scouting exists. Everything the app collects over two days is spent in a 20-minute window where a lead must respond in seconds to "team 254 just got picked, who's next?". If the app doesn't support that moment, the data doesn't get used.
 
-### 12.2 Proposed decisions
+### 12.2 Confirmed decisions
 
-- An ordered **pick list** per event, built by dragging teams, seeded from any ranking or composite score.
-- **Do-not-pick list** with a required reason.
-- Separate **first-pick** and **second-pick** lists (different criteria: a first pick complements you, a second pick is often defensive or specialised).
-- **Live cross-off**: as alliances form, picked/captain teams are struck through automatically so the next available team is always obvious. Realtime, multi-device, so several people can watch the same list.
-- Notes per team visible inline, and printable/exportable for the pit.
+*(Confirmed 2026-08-31 on closing topic 12.)*
 
-### 12.3 Open questions
+**In scope for v1 (Q12.1),** and **moved from Phase 3 to Phase 2** (§19.1). The original Phase 3 bundled the pick list with the TBA/FRC import, which is deferred to §24 — but the pick list needs nothing TBA provides (no schedule, no official results), so leaving it there would have deferred it by association.
 
-- **Q12.1** — Is the pick list in scope, and for which phase?
-- **Q12.2** — Should alliance selection results be **entered manually** during selection, or imported from the API (which may lag by minutes — too slow for live use)? Probably: manual entry, live-synced across devices.
-- **Q12.3** — Do you want **collaborative editing** of the pick list (multiple leads reordering simultaneously) or single-editor with viewers?
+**Ownership — the admin owns everything, with exactly one exception (Q12.3).** No collaborative editing: **single editor, many viewers.**
+
+- **Admin only:** create the pick lists, reorder them, add/remove teams, edit or remove do-not-pick entries, and record the alliance bracket.
+- **Lead:** may **add a team to the do-not-pick list with a required reason** — and nothing else. A lead cannot reorder a pick list, cannot add or remove a team on one, and cannot edit or remove a do-not-pick entry (not even one they created).
+- **Scouter and Lead:** read-only view of the pick lists, the do-not-pick list and the alliance bracket (consistent with §5.1 — all data is visible to every role).
+
+**Two ordered pick lists per event: `first` and `second`.** Different criteria justify different lists (a first pick complements you; a second pick is often defensive or specialised). Each is an ordered list of teams built by **drag-reorder** and **seeded from a ranking weight preset** (§11.2): the admin picks a saved preset (or the ranking page's current live weights) and the list is generated in that weighted-composite order, then hand-adjusted. **Reseeding replaces the whole order and asks for confirmation first**, because it discards manual adjustments.
+
+Each row shows: **rank position**, team number + name, the **canonical basic rank** (status-aware avg points/match, §11.2), the **reliability/availability counts** (breakdowns / no-shows / disabled, §9.2), the **seeding preset's metric columns**, and the team's **inline notes**.
+
+**Second-pick round awareness.** The app tracks which round selection is in. While any alliance still has an empty `pick1` slot the **first-pick list** is the active list; once all 8 alliances have a first pick the app **switches to the second-pick list automatically** (manually overridable both ways). Only the active list is emphasised; the other stays viewable.
+
+**Do-not-pick list — its own list, reason required, blocking by default.**
+
+- Adding a team **requires a free-text reason** — no reason, no add. The author is recorded on the entry.
+- **A team on the do-not-pick list cannot be added to a pick list.** The add action is **blocked**, showing the reason and who wrote it. To pick that team you must first remove them from the do-not-pick list.
+- **Exception — the team is *already* on a pick list when it gets do-not-picked:** this is **flagged, never blocked**. The team stays exactly where it is in the order, is rendered with a warning marker, and a banner tells the admin to resolve it. A lead's addition therefore never fails and never silently reorders the admin's list.
+- **One-tap removal, from the do-not-pick page itself.** Every row carries a remove action in place (inline confirm — no dialog chain, no navigating to another screen). Removing an entry **clears any pick-list flag it caused, immediately**.
+
+**Alliance bracket — manual entry, synced when possible (Q12.2).** No import: TBA is deferred (§14 → §24) and the official feed lags by minutes, which is useless in a room where a pick happens every 30 seconds.
+
+- **8 alliances × 3 robots** — `captain`, `pick1`, `pick2` — plus an optional **`backup`** slot per alliance.
+- The admin enters each result manually as selection happens. Every entry **writes locally first** (optimistic local UI, §8.1) and **syncs immediately if there is internet, otherwise on the next sync** — the ordinary §7.3 outbox path. This matters because selection is watched from the stands, where there is usually no signal.
+- **Declined pick.** A team that declines is recorded as **declined against that alliance**. It stays available to be picked later (or to become a captain) per FRC rules, and the app shows a "declined — alliance N" marker so nobody asks twice or wastes a pick.
+- **Live cross-off.** As captains, picks, and backups are entered, every affected team is **struck through automatically across both pick lists**, so the top unstruck row is always the next available team.
+
+**Cross-off propagation, with realtime deferred (§8.1).** On the **admin's own device** cross-off is instant (local optimistic write). **Viewers online** see it on the standard **45-second auto-refresh** or a manual refresh. **Viewers offline** see nothing until they sync. The operating rule is therefore explicit: **during selection the admin's device is the source of truth**, and every other screen is advisory. If cross-device realtime lands later (§24) it upgrades this with no design change.
+
+**Offline behaviour.** Pick lists, the do-not-pick list and the alliance bracket are all **editable offline** and sync through the outbox. This **extends §7.3**, which previously said only "the admin-only pick list" — it now covers all three surfaces, and records that a **lead may add a do-not-pick entry offline** too.
+
+**Reordering is one operation against a list-level version. [decided-by-Claude]** §7.3's last-write-wins is a *per-row* rule, but a pick list is an **ordering** — two devices reordering the same list offline would silently discard one person's entire reordering. So the `pick_lists` row carries **its own version**, and a drag-reorder writes the **whole ordering as a single operation** stamped with the base version it started from. Fast-forward → applied and the version bumps. Genuine divergence → the §7.3 **review-conflicts** queue with the superseded ordering preserved. Individual team rows (add / remove / edit note) remain ordinary last-write-wins rows. Single-editor ownership makes this rare; the guard exists so that when it happens, nobody loses an hour of ordering work.
+
+**Printing stays deferred.** A printed pick list for the pit is standard practice, but it rides on the deferred export work (Q10.4 → §24), so **v1 is screen-only**. **Q16.4** (printable views) remains open and is where this returns. **[RAISED BY ME]**
+
+**No pick-list history and no ordering snapshots** — consistent with "no per-entry edit history" (§13.2) and "no user audit log" (§5.1). The bracket's `declined` markers are the only historical record the feature keeps.
+
+### 12.3 Data model
+
+```
+pick_lists(id, event_id, kind ∈ {first, second}, seeded_from_preset_id?, version, updated_at)
+pick_list_entries(id, pick_list_id, team_id, rank, note?, deleted_at?)
+
+do_not_pick(id, event_id, team_id, reason /* required */, created_by, created_at, deleted_at?)
+
+alliances(id, event_id, number 1..8)
+alliance_slots(id, alliance_id, slot ∈ {captain, pick1, pick2, backup}, team_id?, deleted_at?)
+alliance_declines(id, alliance_id, team_id, created_at)
+```
+
+`rank` is a per-list integer rewritten **wholesale** by a reorder operation (§12.2); `version` exists on `pick_lists` only — it is the ordering guard. Everything is scoped to one **event** (§4.1), client-UUID keyed, soft-deleted (`deleted_at`), and rides the §7.3 outbox. Cross-off state is **derived** from `alliance_slots`, never stored on the pick list — so a corrected bracket instantly corrects every list (same principle as derived scores, §2.2).
+
+### 12.4 The pages
+
+One **"Alliance selection"** area with three tab-switched pages:
+
+1. **Pick list page** — the active-round list (first/second toggle plus automatic round detection), drag-reorder for the admin, automatic strikethrough for taken teams, do-not-pick warning markers, inline notes, a reseed-from-preset action, and a **compact "next available team" header** designed to be readable at arm's length in a loud arena.
+2. **Do-not-pick page** — every flagged team with its reason and author, a **one-tap remove** per row, and an "add team" action available to leads as well as the admin.
+3. **Alliance bracket page** — the 8 alliances × captain / pick1 / pick2 / backup grid; tap a slot to enter a team; declined markers shown against the alliance that was refused.
+
+### 12.5 Closed questions
+
+- ~~**Q12.1**~~ ✓ **CLOSED 2026-08-31:** **in scope for v1**, and **moved from Phase 3 to Phase 2** (§19.1) — it depends on nothing from the deferred TBA import.
+- ~~**Q12.2**~~ ✓ **CLOSED 2026-08-31:** alliance-selection results are **entered manually**; each entry writes locally and **syncs immediately when online, otherwise on the next sync** (§7.3 outbox). No API import.
+- ~~**Q12.3**~~ ✓ **CLOSED 2026-08-31:** **no collaborative editing** — the **admin edits, everyone else views**. Single exception: a **lead may add a do-not-pick entry with a required reason**, and may not edit or remove one.
+- ~~Live cross-off assumes realtime~~ ✓ **Resolved:** cross-off is instant on the admin's device, reaches online viewers on the **45 s auto-refresh**, and offline viewers on sync; the admin's device is the declared source of truth during selection (closes the §8.2 dependency note).
 
 ---
 
@@ -929,10 +991,10 @@ Everything above at once is a very large build. Suggested order, where each phas
 Auth and roles → events and teams → form builder with core field types → offline data entry → sync → **QR fallback transfer (animated + compressed)** → raw data browse → basic per-team stats and ranking table.
 
 **Phase 2 — Analysis**
-Metric builder → chart and dashboard builder → team compare → coverage/quality matrix → export.
+Metric builder → chart and dashboard builder → team compare → **pick list, do-not-pick list & alliance bracket** → coverage/quality matrix → export. *(Alliance selection moved up from phase 3 on Topic 12 close — it depends on nothing the TBA import provides.)*
 
 **Phase 3 — Competition workflow**
-TBA/FRC API import → scouter assignments → pick list and alliance selection.
+TBA/FRC API import → scouter assignments → schedule-driven coverage matrix and official-result validation. *(Pick list and alliance selection moved to phase 2 on Topic 12 close, 2026-08-31.)*
 
 **Phase 4 — Depth**
 Pit and super scouting forms → photos → advanced field types (position picker, event log, cycle times) → scouter reliability → multi-season history.
@@ -1059,6 +1121,7 @@ Decisions get recorded here as topics close, so Claude Code (and future you) can
 
 | Date | Topic | Decision | Rationale |
 |---|---|---|---|
+| 2026-08-31 | 12 / 5 / 7 / 8 / 19 | **Topic 12 CLOSED.** Alliance selection is **in scope for v1 and moved from phase 3 to phase 2** (Q12.1) — nothing in it depends on the deferred TBA import. **Admin-only editing, everyone else views** (Q12.3); the single exception is a **lead adding a do-not-pick entry with a required reason**, which they may not then edit or remove. Two ordered pick lists (**first** / **second**) per event, drag-reordered and **seeded from a §11.2 saved weight preset**, with **automatic round switching** once all 8 alliances hold a first pick. **Do-not-pick blocks an add outright, but only *flags* a team already on a pick list** — a lead's addition never fails and never reorders the admin's list — and every do-not-pick row has **one-tap removal** that instantly clears the flag. **Alliance bracket entered manually** (Q12.2): 8 alliances × captain/pick1/pick2 + optional **backup**, plus **declined** markers; writes locally and syncs now if online, otherwise on the next sync. **Cross-off is derived** from the bracket and is instant on the admin's device, 45 s for online viewers, sync-time for offline ones — **the admin's device is the declared source of truth during selection** (resolves the §8.2 dependency note). A **list-level `version` guards reorders** as one whole-ordering operation. Printing stays deferred (Q10.4 → §24; Q16.4 open). Role matrix (§5.2), offline-editable set (§7.3) and phasing (§19.1) amended to match. | The 20-minute selection window is the whole point of the two days of scouting, so the design optimises for one person answering "who's next?" in seconds, not for consensus tooling. **Single-editor ownership is the load-bearing choice:** with realtime deferred (§8) and the room usually offline, a shared editable list would produce two devices disagreeing at the worst possible moment — so one device is authoritative and everyone else reads. The lead's do-not-pick exception exists because the people who *notice* a robot is unpickable are the leads watching matches, and the cost of them being able to add a warning is far lower than the cost of that warning never reaching the list. Blocking an add but merely flagging an existing entry keeps the two roles from fighting: a lead can always raise a concern, but only the admin ever changes the order. Deriving cross-off from the bracket instead of storing it means a mistyped pick is corrected in one place and every list fixes itself, the same reason scores are derived from raw entries (§2.2). The list-level version exists because last-write-wins is per-row and an ordering is not a row — without it, two offline reorders would silently destroy one person's work. Moving the feature to phase 2 prevents it from being deferred by association with a TBA import it never needed. |
 | 2026-08-12 | 20 | **AI/MCP is setup only.** Build the two non-deferrable prerequisites (semantic field metadata, transport-agnostic use-case layer) in phase 1. No MCP endpoint, no LLM calls, no AI UI. Phases 5–6 deferred. | Keeps phase 1 small while ensuring the only expensive-to-retrofit pieces exist. Everything deferred is purely additive. |
 | 2026-08-14 | 3 | **Storage = Option A (JSONB payload) with generated per-version views.** | Data volume is tiny for Postgres, so Option B's speed edge is irrelevant, while its costs (runtime DDL, per-table RLS, offline schema-mirroring, and losing multi-season history if old tables are dropped) are exactly what breaks at a venue. A gives B's query ergonomics via generated views without the risk, and is far easier to expose to an LLM (one stable shape + field dictionary). |
 | 2026-08-14 | 3 | **Immutable form versioning**, but label and range edits are in-place (not a new version); range edits never invalidate existing data; keys permanent. | Preserves interpretability of historical entries while keeping the common, low-risk edits cheap during build season. |
@@ -1114,7 +1177,7 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 - ~~**Topic 9:** Q9.1 – Q9.8~~ ✓ **CLOSED 2026-08-20** — Layer-1 metric engine (menu builder, multi-field sums, per-page limit); match-subset filters, no recency weighting; SD displayed not ranked; reliability first-class in ranking; min sample = 1; one canonical entry per (team, match) per §7.3; no cross-event normalisation. Layer-2 official-result stats → §24. Team stat page + admin-saved general stat pages (leads draft-only, §5.2); full-season slope view over an admin-orderable event `sort_order` (§4.1). Confirmed in §9.1/§9.2.
 - ~~**Topic 10:** Q10.1 – Q10.10~~ ✓ **CLOSED 2026-08-21** — confirmed in §10.1/§10.2. Full high-analysis chart set (Recharts + hand-built image/heatmap overlays); dashboards shared when saved, drafts private; scope per-event or per-season, built-ins on active/selected event; phone top-8/bottom-8 for all-teams charts, per-team views to 14 matches; view-time metric selector on shared X, expand-to-stack capped at 4; **operational stats configurable via the same builder over app metadata**. Deferred to §24: export (Q10.4), drill-down (Q10.7), scouted-vs-official (Q10.8, gated on TBA), next-year field re-map wizard (Q10.3).
 - ~~**Topic 11:** Q11.1 – Q11.4~~ ✓ **CLOSED 2026-08-21** — confirmed in §11.2. Dedicated search pages (no global omnibox); canonical **basic rank = status-aware avg points/match**. Five pages specified: team search (season-wide, event-only rank badges + top-3 medals, offline-disabled event switch to a team's other events), entry preview, entry search (active comp, both kinds, by team/number/match/scouter, shows points), ranking page (admin-built table + weighted-composite mode with 0–1 normalisation, `1−norm` for lower-is-better, 0.5 for missing, saved presets seeding Topic 12, reliability as a weightable column), compare (2 = head-to-head, 3–6 = radar+table), match preview (6 user-entered teams, summed-average prediction). Q11.1 composite ranking = yes; Q11.2 notes search + Q11.4 TBA team info → §24; Q11.3 multi-season history dropped.
-- **Topic 12:** Q12.1 – Q12.3
+- ~~**Topic 12:** Q12.1 – Q12.3~~ ✓ **CLOSED 2026-08-31** — confirmed in §12.2–§12.4. **In scope, moved to phase 2** (Q12.1); alliance results **entered manually**, synced now-or-next-sync (Q12.2); **admin edits, everyone else views**, the one exception being a **lead adding a do-not-pick entry with a required reason** (Q12.3). Two ordered pick lists (first/second) seeded from a §11.2 weight preset, automatic round switch, do-not-pick **blocks** an add but only **flags** a team already on a list, one-tap removal, **8 alliances × captain/pick1/pick2 + backup** with **declined** markers, derived cross-off, and a list-level version guarding reorders. Printing stays deferred (Q10.4 → §24; Q16.4 still open).
 - ~~**Topic 13:** Q13.1 – Q13.5~~ ✓ **CLOSED 2026-08-21** — confirmed in §13.2. Entry validation = **hard block only on out-of-`expected_range` values** (Q13.4); outlier flagging + coverage matrix → §24 (matrix gated on TBA, Q13.1); **no redundant-scouting feature** (conflicts via §7.3 review, keep last, Q13.2); **no scouter reliability score** (Q13.3); **no dedicated bulk-fix tools** (reassign = edit team, merge = resolve conflict, Q13.5); **no full per-entry edit history**. Operational meta-metric catalogue finalized in §10.2; all-dashboard **value-shading (red→green)** color rule added to §10.2.
 - **Topic 14:** Q14.1 – Q14.5
 - **Topic 15:** Q15.1 – Q15.9
@@ -1134,7 +1197,7 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 6. ~~**Q1.4** — Single team or multi-team?~~ ✓ **CLOSED: single team.**
 7. ~~**Q14.1** — External API import?~~ ✓ **CLOSED: wanted, deferred → §24 nice-to-have.**
 
-All seven top blockers are now closed, and **topics 1–11 and 13 are fully CLOSED**. Remaining open topics: 12 (alliance selection & pick list), 14 (TBA import — deferred to §24 but still to be formally closed), 18, 19, and the partials (15/16/17/20). Topic 12 is now the last major feature topic — the ranking-page weighted presets (§11.2) seed it.
+All seven top blockers are now closed, and **topics 1–13 are fully CLOSED** — every major *feature* topic is done. Remaining: 14 (TBA import — already deferred to §24, still to be formally closed), 18 (deployment/ops), 19 (delivery phases), and the partials (15/16/17/20). The next work is **build-shaped, not feature-shaped**: close 15/16/17/18/19, then write `SPEC-FINAL.md` and `IMPLEMENTATION-PLAN.md`.
 
 ---
 
@@ -1144,6 +1207,7 @@ Every edit is logged here so changes can be audited without reprinting the docum
 
 | Version | Date | Sections touched | Change |
 |---|---|---|---|
+| v0.24 | 2026-08-31 | 0, 0.2, 5.2, 7.3, 7.4, 8.2, 12 (rewritten & closed), 19.1, 21, 22, 23 | **Topic 12 CLOSED.** Answered Q12.1–Q12.3 and rewrote §12 into confirmed decisions (§12.2), a data model (§12.3), the three pages (§12.4) and closed questions (§12.5). In scope, **moved from phase 3 to phase 2**. **Admin-only editing, all other roles view**; a **lead may add a do-not-pick entry with a required reason** only. Two ordered pick lists (first/second) seeded from a §11.2 weight preset with automatic round switching. Do-not-pick **blocks** adding a listed team but only **flags** one already on a list; **one-tap removal** clears the flag. **Alliance bracket entered manually** — 8 × captain/pick1/pick2 + backup, **declined** markers — written locally and synced now-or-next-sync. **Cross-off derived** from the bracket; admin's device is the source of truth during selection (**resolves the §8.2 realtime dependency note**). **List-level `version`** guards whole-ordering reorders against §7.3's per-row last-write-wins. Printing stays deferred (Q10.4 → §24; Q16.4 open). Amended §5.2 (two new matrix rows), §7.3/§7.4 (offline-editable set now covers do-not-pick + bracket) and §19.1 (phases 2 and 3). |
 | v0.1 | 2026-08-12 | all | Base document created from the initial requirements. 19 topics, ~100 questions. Added the fixed/flexible domain split (topic 2), venue-connectivity reality (topic 7.2), form versioning (topic 3.3), external API import (topic 14), pick list (topic 12) and data quality (topic 13) as items not in the original brief. |
 | v0.2 | 2026-08-12 | 0.2, 3.2, 3.3, 3.4, 15.2, 15.3, 19.1, 22 | Added topic 20 (AI/LLM/MCP). Added semantic field metadata to 3.3 with Q3.9–Q3.10. Added transport-agnostic use-case layer to 15.2 with Q15.8–Q15.9. Noted that the MCP goal strengthens the JSONB recommendation in 3.2. Added phases 5–6. |
 | v0.3 | 2026-08-12 | 0.2, 19.1, 20.1, 20.4, 21, 22 | **Scope decision:** AI/MCP is setup only — no LLM connection. Phases 5–6 marked deferred. Q20.1–Q20.4 and Q20.7–Q20.12 parked; Q20.5–Q20.6 remain live. First Decision Log entry added. |
