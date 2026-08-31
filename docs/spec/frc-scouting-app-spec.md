@@ -1,6 +1,6 @@
 # FRC Scouting Platform — Design Specification (Living Document)
 
-**Status:** DRAFT v0.24 — **topics 1–13 CLOSED** (every feature topic). Core architecture forks decided (storage, versioning, offline stats, stack, access model, language, roles/auth, data-entry UX, offline-first & sync, realtime deferred → 45s refresh, dashboards & visualisation, search/ranking/browse, data quality, alliance selection). Remaining: 14 (formal close of the deferred TBA import), 18, 19, and the partials 15/16/17/20.
+**Status:** DRAFT v0.25 — **topics 1–13 and 15 CLOSED.** Every feature topic plus the system architecture. Core forks decided (storage, versioning, offline stats, stack, access model, language, roles/auth, data-entry UX, offline-first & sync, realtime deferred → 45s refresh, dashboards & visualisation, search/ranking/browse, data quality, alliance selection, repo layout & services). Remaining: 14 (formal close of the deferred TBA import), 18, 19, and the partials 16/17/20.
 **Last updated:** 2026-08-31
 **Owner:** (your name / team number)
 **Destination:** this document, once all topics are CLOSED, becomes the input spec for Claude Code to generate an implementation plan.
@@ -35,7 +35,7 @@ The document is split into **topics** (sections 2–19). Every topic contains:
 | 12 | Alliance selection & pick list | CLOSED |
 | 13 | Data quality, integrity & scouter reliability | CLOSED |
 | 14 | External data integration (TBA / FRC Events API) | OPEN |
-| 15 | System architecture, repo layout & services | PARTIAL — Q15.1/Q15.2/Q15.4/Q15.8 closed |
+| 15 | System architecture, repo layout & services | CLOSED |
 | 16 | UI/UX design system & responsive behaviour | PARTIAL — Q16.2 closed |
 | 17 | Non-functional requirements | PARTIAL — Q17.3 closed (free tier) |
 | 18 | Deployment, environments & operations | OPEN |
@@ -173,7 +173,7 @@ You said "year-agnostic", which is right — but there is a set of concepts that
 - Forms are created, edited and deleted from inside the app by an admin.
 - A form represents the game for a given year and is linked to competitions.
 - Form fields are the targets that charts and statistics point at.
-- **Storage model: Option A — one `scouting_entries` table with a JSONB payload** (Q3.1). Per-form-version SQL views flatten the JSONB into typed columns for analytics; validators and casts are **generated from the field definitions**, not hand-written per form. *(confirmed 2026-08-14)*
+- **Storage model: Option A — one `scouting_entries` table with a JSONB payload** (Q3.1). Validators and casts are **generated from the field definitions**, not hand-written per form. *(confirmed 2026-08-14)* **Amended 2026-08-31 (topic 15 close, C1): the generated per-form-version SQL views are dropped from v1 → §24.** Flattening the JSONB into typed fields happens **only in the shared TypeScript engine**; nothing in v1 reads a view, and generating them would require runtime `CREATE VIEW` (see §15.1).
 - **Immutable form versioning** (Q3.2). A new version is created only by *structural* changes — adding, removing/deprecating, or retyping a field. Editing a field's **label** or **range/min-max** happens in place and does **not** create a version; a range change applies to new entries only and **never retroactively invalidates data already collected**. Field `key`s are permanent. *(confirmed 2026-08-14)*
 - **Semantic field metadata captured at field-creation time** (Q3.9). `description`, `unit`, `phase` and `direction` are **required** per field; `category`, `expected_range`, `include_in_ai_context` are optional. It cannot be backfilled and it drives the generated validators/views, chart labels and default sort (and is the LLM data dictionary later). *(confirmed 2026-08-14)*
 - **Field type catalogue** (Q3.3). All catalogue types ship **except Photo** (deferred): Counter, Number, Toggle, Single select, Multi select, Rating, Short text, Long text, Timer, Event log, Field-position picker, **Cycle path**, Computed, Section. *(confirmed 2026-08-17; Cycle path added 2026-08-20)*
@@ -208,7 +208,7 @@ scouting_entries(
 
 - Pros: no schema changes at runtime; one code path for everything; trivially syncable offline; trivial to add/remove/reorder fields; a single security policy covers all forms; Postgres indexes JSONB well (GIN, or expression indexes on hot fields).
 - Cons: aggregate queries need casts (`(data->>'auto_high_goals')::numeric`); no database-level type enforcement — validation lives in the app and in a check function; slightly slower than native columns at very large scale.
-- Mitigation for the cons: generate a **per-form-version SQL view** that flattens the JSONB into typed columns. Charts and statistics then query a normal-looking table. Optionally materialise it for speed.
+- Mitigation for the cons: generate a **per-form-version SQL view** that flattens the JSONB into typed columns. Charts and statistics then query a normal-looking table. Optionally materialise it for speed. *(Amended 2026-08-31, topic 15 close: **deferred → §24**. Creating those views at form-publish time means the server issues DDL against the live database, which puts part of the schema outside the repo's migrations and duplicates the shared engine's flattening. The cons are instead absorbed by the TS engine, which already reads the JSONB directly — online and offline.)*
 
 **Option B — A real Postgres table per form (runtime DDL).**
 
@@ -220,7 +220,7 @@ scouting_entries(
 - Pros: typed value columns; fully flexible.
 - Cons: pivoting back into rows-per-entry is painful and slow; row count explodes (60 fields × 6 robots × 100 matches ≈ 36,000 rows per event); offline sync at row granularity is fiddly.
 
-**Recommendation: Option A**, with generated flattening views for analytics. It gives you Option B's query ergonomics without the operational risk.
+**Recommendation: Option A**, with generated flattening views for analytics. It gives you Option B's query ergonomics without the operational risk. *(Views since deferred → §24; the shared TS engine is the one flattening path — see §15.1.)*
 
 **The MCP requirement (topic 20) strengthens this.** With Option A there is *one* stable table shape plus a machine-readable field dictionary, so an LLM discovers this year's game by reading one document. With Option B the model would have to discover N unknown tables with unknown column names every season, and any tool that queries them has to generate dynamic SQL — which is both fragile and the classic injection surface. Option A is meaningfully easier to expose safely to a model.
 
@@ -837,8 +837,20 @@ Manually typing 40 team numbers and 100 matches into an app at 8am on competitio
 - **All traffic goes through the server API** (Q15.1) — no direct client→Supabase access on the hot path. Load is low, and this is clean now that cross-device realtime is deferred (topic 8, §24). *(confirmed 2026-08-14)*
 - **Transport-agnostic use-case layer** (Q15.8): every operation is a named, typed, described use case (Zod in/out) in `packages/shared` / `server/core`; HTTP is the transport now, MCP mappable mechanically later. *(confirmed 2026-08-14)*
 - **Dynamic-form validation is generated at runtime from the field definitions.** Hand-written Zod covers only the fixed skeleton and the use-case tool inputs/outputs; a new season's form needs no code change. *(confirmed 2026-08-14)*
+- **Server framework: Hono. No tRPC** (Q15.3). The typed client is derived from the **use-case registry itself** — every use case already carries a Zod input schema, a Zod output schema and a plain-language description because MCP needs them, so end-to-end typing between client and server falls out for free. tRPC would be a second typing layer over that same registry and contributes nothing to the MCP mapping, which needs name + JSON Schema + description rather than a tRPC router. *(decided-by-Claude 2026-08-31)*
+- **Generated Supabase database types, and Zod shared between client and server** (Q15.5). DB types are generated by the Supabase CLI and committed, so a migration that changes a column surfaces as a **compile error** rather than a runtime surprise; the Zod schemas in `packages/shared` are the single validation source for both sides. *(confirmed 2026-08-31)*
+- **No Supabase Storage and no binary uploads in v1** (Q15.6). The **season game image ships as a static client asset** — `apps/client/public/seasons/<year>/field.webp` — committed to the repo and deployed with the client. The database stores **only the path string** on the season row, never the image. The service worker precaches it with the app shell, which is exactly what makes **offline** field-position and cycle-path entry work (Q15.12) at no cost to the §7.3 offline budget. *(confirmed 2026-08-31)*
+  - **Consequence:** adding a season needs a commit and a redeploy. Acceptable — it happens once a year, months before an event — but it belongs in the new-season checklist in `docs/ops/SETUP.md` (§18.1).
+  - **The image is immutable once entries exist.** Every stored `{x, y}` is normalized against that exact image, so swapping it silently re-frames all historical position and cycle-path data. A new image means a **new filename** and a new form version — the same family of rule as permanent field keys (§3.1).
+  - **A missing image must fail loudly.** The position picker and cycle-path fields show an explicit error, never a blank canvas that quietly records meaningless coordinates.
+- **A full development environment mirroring production** (Q15.7): a **separate dev Supabase project**, a **separate dev Vercel deployment**, and a local setup that runs both apps against the dev project. Development never touches production data — especially not while testing destructive features like "delete form" (§3.1 cascade delete). *(confirmed 2026-08-31)*
+- **MCP transport = a route inside `apps/server`**, extractable to its own `apps/mcp` later (Q15.9). **Not built in v1** — the decision is recorded now only so the use-case layer is shaped correctly; the route itself belongs to phase 5. *(confirmed 2026-08-31)*
+- **PWA update policy** (Q15.11). `vite-plugin-pwa` precaches the app shell and the season assets. A new version is **never applied by auto-reload**: it activates on the **next cold start**, the running app shows a discreet "update ready" hint, and a **version string is always visible** for diagnosing "my tablet behaves differently". A service worker that reloads the tab mid-match would destroy a scouter's screen at the one moment it matters. *(confirmed 2026-08-31)*
+- **Deployment topology** (Q15.13). **Two Vercel projects from the one repository** — client as a static build, server as Vercel Functions. Client→server is therefore cross-origin, so **authentication uses a bearer token in an `Authorization` header, never cookies**, which sidesteps CORS credentials and `SameSite` entirely. *(confirmed 2026-08-31)*
+- **Toolchain pinning** (Q15.14). **pnpm workspaces + Turborepo**; the pnpm version pinned via `packageManager`; **Node 22**; and the **Node runtime (not Edge)** for every server function, since the service-role Supabase client and the shared engine assume Node. A lint rule keeps `packages/shared` **browser-safe** — no Node built-ins, no service-role client — because the client bundles it. *(confirmed 2026-08-31)*
+- **No generated per-form-version SQL views** (C1, amends §3.1). Flattening lives **only in the shared TypeScript engine**. Generating views at form-publish time would make the server run `CREATE VIEW` against the live database — putting part of the schema outside the repo's migrations (breaking "the schema is reproducible from the repo alone"), handing the app DDL privileges in production, and creating a **second** flattening implementation that will drift from the TS one and that nobody will test. Nothing in v1 reads them; ad-hoc SQL queries the JSONB directly. Deferred → §24. *(confirmed 2026-08-31)*
 
-### 15.2 Proposed decisions
+### 15.2 Architecture detail (confirmed)
 
 **Repository layout** (monorepo with pnpm workspaces + Turborepo):
 
@@ -846,14 +858,21 @@ Manually typing 40 team numbers and 100 matches into an app at 8am on competitio
 frc-scouting/
   apps/
     client/          # the PWA — React + Vite + TypeScript
-    server/          # API service — Node + Hono (or Express) on Vercel Functions
+      public/
+        seasons/2027/field.webp   # the season game image: static, precached,
+                                  # only its path is stored in the DB (Q15.6)
+    server/          # API service — Node + Hono on Vercel Functions (Node runtime, not Edge)
   packages/
     shared/          # TypeScript types, Zod schemas, form-definition model,
-                     # metric evaluation engine (shared by client offline + server)
+                     # metric evaluation engine (shared by client offline + server).
+                     # Browser-safe: no Node built-ins, no service-role client.
     db/              # Supabase migrations, generated DB types, seed data
   docs/
     spec/            # this document
     plans/           # implementation plans
+    ops/             # SETUP.md (Supabase + Vercel setup) and .env.example (§18.1)
+  .github/
+    workflows/       # CI — lint, typecheck, test, build on every push to `develop`
 ```
 
 A shared package is important here: the form model, the validation rules, and the metric engine must behave identically online and offline, and duplicating them in two languages guarantees drift.
@@ -881,25 +900,32 @@ Each one has a Zod input schema, a Zod output schema, and a plain-language descr
 
 | Transport | Consumer |
 |---|---|
-| HTTP / tRPC | the web client |
+| HTTP (Hono) | the web client |
 | MCP tools | an LLM (Claude Desktop, Claude Code, or your own in-app agent) |
 | CLI / scripts | imports, backfills, testing |
 
 The pay-off is that MCP support becomes a mechanical mapping — a Zod schema converts directly to the JSON Schema an MCP tool advertises, and the description you already wrote becomes the tool description the model reads. If we don't do this, MCP means writing a second, parallel implementation of every query, and the two will drift.
 
+**This registry is also why tRPC was rejected (Q15.3).** The typed client is generated from the same registry the MCP tools will be generated from, so tRPC would add a dependency and a router format on top of a layer that already provides end-to-end types — and it would still not emit the JSON Schema an MCP tool needs.
+
 **Constraints to design around on Vercel:** serverless functions are stateless and time-limited, so no long-running import jobs — chunk them, or run them as Vercel Cron invocations. No local filesystem persistence. Cold starts exist, so don't put the scouter's critical path behind a rarely-called function.
 
-### 15.3 Open questions
+### 15.3 Closed questions
 
 - ~~**Q15.1** — Do you accept the **hybrid** access model, or all traffic through the server API?~~ ✓ **CLOSED 2026-08-14: all traffic through the server API** (§15.1).
 - ~~**Q15.2** — Client framework: Vite + React SPA or Next.js?~~ ✓ **CLOSED 2026-08-14: React + Vite PWA** (§15.1).
-- **Q15.3** — Server framework: Hono (tiny, fast, great on Vercel Functions), Express (familiar), or Next.js API routes? And do you want **tRPC** for end-to-end typed calls between client and server?
+- ~~**Q15.3** — Server framework, and do you want tRPC?~~ ✓ **CLOSED 2026-08-31: Hono, no tRPC** — the typed client comes from the use-case registry, which tRPC would only wrap (§15.1). *(decided-by-Claude)*
 - ~~**Q15.4** — TypeScript everywhere?~~ ✓ **CLOSED 2026-08-14: yes** (§15.1).
-- **Q15.5** **[RAISED BY ME]** — Do you want **generated database types** from Supabase (so a schema change surfaces as a compile error), and **Zod** validation shared between client and server?
-- **Q15.6** **[RAISED BY ME]** — Where do **file uploads** (robot photos) go — Supabase Storage, presumably? And who is allowed to upload?
-- **Q15.7** **[RAISED BY ME]** — Do you need a **local development** setup that works without touching production data (Supabase local via Docker, or a separate dev project)? I strongly recommend a separate dev Supabase project at minimum — you do not want to test a "delete form" feature against real competition data.
+- ~~**Q15.5** **[RAISED BY ME]** — Generated database types and shared Zod?~~ ✓ **CLOSED 2026-08-31: yes to both** (§15.1).
+- ~~**Q15.6** **[RAISED BY ME]** — Where do file uploads go?~~ ✓ **CLOSED 2026-08-31: no uploads and no Supabase Storage in v1** — the season game image is a static client asset committed to the repo; the DB stores only its path (§15.1). Robot photos remain deferred (§3.1).
+- ~~**Q15.7** **[RAISED BY ME]** — Do you need a local development setup that never touches production data?~~ ✓ **CLOSED 2026-08-31: yes — a full dev environment** (dev Supabase project + dev Vercel deployment + local run) (§15.1, §18.1).
 - ~~**Q15.8** **[RAISED BY ME]** — Do you accept the **use-case / transport-agnostic service layer**?~~ ✓ **CLOSED 2026-08-14: yes** (§15.1).
-- **Q15.9** **[RAISED BY ME]** — Should the **MCP server be its own deployable app** (`apps/mcp`) or a route inside the existing server app (`apps/server/mcp`)? A separate app gives independent scaling, its own auth surface and cleaner logs; a route is less to maintain. I lean toward a route in the server app now, extractable later, since they share the same core.
+- ~~**Q15.9** **[RAISED BY ME]** — Is the MCP server its own app or a route in the server app?~~ ✓ **CLOSED 2026-08-31: a route inside `apps/server`**, extractable later — and **built only when the MCP work itself happens** (phase 5), not in v1 (§15.1).
+- ~~**Q15.10** **[RAISED BY ME]** — Generated per-form-version SQL views require runtime DDL, which contradicts "the schema is reproducible from the repo alone".~~ ✓ **CLOSED 2026-08-31: views dropped from v1 → §24**; the shared TS engine is the only flattening path (§15.1, amends §3.1).
+- ~~**Q15.11** **[RAISED BY ME]** — How does a PWA update reach devices without disrupting a scouter?~~ ✓ **CLOSED 2026-08-31: precached shell, update on next cold start only, never an auto-reload, visible version string** (§15.1).
+- ~~**Q15.12** **[RAISED BY ME]** — The season game image must be available offline or position-picking breaks.~~ ✓ **CLOSED 2026-08-31: solved by Q15.6** — as a static asset it is precached with the app shell, so no separate offline budget or cache path is needed (§15.1).
+- ~~**Q15.13** **[RAISED BY ME]** — Vercel topology and the cross-origin consequence.~~ ✓ **CLOSED 2026-08-31: two Vercel projects from one repo; bearer token in a header, no cookies** (§15.1, §18.1).
+- ~~**Q15.14** **[RAISED BY ME]** — Runtime and toolchain pinning.~~ ✓ **CLOSED 2026-08-31: pnpm + Turborepo, pinned pnpm, Node 22, Node runtime not Edge, `packages/shared` kept browser-safe by lint rule** (§15.1).
 
 ---
 
@@ -962,6 +988,11 @@ The pay-off is that MCP support becomes a mechanical mapping — a Zod schema co
 ### 18.1 Confirmed requirements
 
 - Client and server both deployed on Vercel.
+- **Two Vercel projects from one repository** (client static build, server functions) and **separate Supabase projects for production and development** (Q15.7, Q15.13). *(confirmed 2026-08-31)*
+- **`docs/ops/SETUP.md` is a required build deliverable** — the exact, followable procedure for creating the Supabase and Vercel projects from scratch and configuring them to match this spec: project creation and region, which settings to change, how migrations are applied by CLI, which keys to copy where, how the dev and production pairs differ, and the **new-season checklist** (commit the game image, create the season, publish the forms). Written so a student who has never seen the project can stand it up unaided. *(confirmed 2026-08-31)*
+- **A committed `.env.example` is the connection contract** — every variable the app needs and, for each: what it is, **where to obtain it**, **which side it lives on** (client bundle vs. server environment) and **which environment** (dev vs. production). Client variables carry the `VITE_` prefix and must contain nothing secret; the **Supabase service-role key and any external API key exist only in the server project's environment**. The file holds names and placeholders — **never real values**. *(confirmed 2026-08-31)*
+- **Mini CI** (Q18.2). Every push to **`develop`**, and every pull request into **`main`**, runs: install (pnpm, cached) → lint → typecheck → **unit tests** → build both apps. The required tests are the two places where failure is invisible and expensive: the **metric engine** (§9 — wrong numbers are worse than no numbers) and the **offline sync / conflict protocol** (§7.3 — impossible to debug at a venue). A pull request into `main` cannot merge unless the run is green. *(confirmed 2026-08-31)*
+- **Branch model:** **`develop` is the integration branch, `main` is the deployable/production branch.** Topic branches are cut from `develop` and merge back into it; `main` only ever receives reviewed, CI-green merges. *(confirmed 2026-08-31)*
 
 ### 18.2 Proposed decisions
 
@@ -974,7 +1005,7 @@ The pay-off is that MCP support becomes a mechanical mapping — a Zod schema co
 ### 18.3 Open questions
 
 - **Q18.1** — Do you have a **domain**, or is a `*.vercel.app` URL fine? (A short, memorable URL matters when 20 people are typing it on phones in a pit.)
-- **Q18.2** — Do you want **CI** (typecheck, lint, tests, migration check on every push)?
+- ~~**Q18.2** — Do you want **CI**?~~ ✓ **CLOSED 2026-08-31: yes — mini CI on every push to `develop` and every PR into `main`** (lint, typecheck, unit tests on the metric engine and sync protocol, build both apps); green is required to merge into `main` (§18.1).
 - **Q18.3** **[RAISED BY ME]** — Do you want error/usage monitoring (Sentry, or Vercel's built-in analytics)?
 - **Q18.4** **[RAISED BY ME]** — Is there any scenario where you need this to run **fully self-hosted or on a laptop at the venue** as a last resort? That's a significant architectural constraint if yes, so better to know now than to discover it at an event.
 - **Q18.5** **[RAISED BY ME]** — Who holds the Vercel and Supabase accounts — a personal account, or a team account that survives students graduating? Handover has killed more team tools than bugs have.
@@ -986,6 +1017,9 @@ The pay-off is that MCP support becomes a mechanical mapping — a Zod schema co
 ### 19.1 Proposed phasing
 
 Everything above at once is a very large build. Suggested order, where each phase is independently useful:
+
+**Phase 0 — Foundations (before any feature work)**
+Monorepo scaffold (pnpm + Turborepo, Node 22) → dev and production Supabase projects → the two Vercel projects → `docs/ops/SETUP.md` and `.env.example` → CI on `develop`. Small, but every later phase assumes it exists. *(added 2026-08-31, topic 15 close.)*
 
 **Phase 1 — Core loop (must have before any event)**
 Auth and roles → events and teams → form builder with core field types → offline data entry → sync → **QR fallback transfer (animated + compressed)** → raw data browse → basic per-team stats and ranking table.
@@ -1121,6 +1155,8 @@ Decisions get recorded here as topics close, so Claude Code (and future you) can
 
 | Date | Topic | Decision | Rationale |
 |---|---|---|---|
+| 2026-08-31 | 15 / 18 / 19 | **Topic 15 CLOSED.** **Hono, no tRPC** (Q15.3) — the typed client is derived from the use-case registry. **Generated Supabase DB types + shared Zod** (Q15.5). **No Supabase Storage or binary uploads in v1** (Q15.6): the season game image is a **static client asset** committed to the repo, the DB stores only its path, and the service worker precaches it — which is also what makes offline position-picking work (Q15.12). The image is **immutable once entries exist** (new image ⇒ new filename) and a missing image **fails loudly**. **Full dev environment** — dev Supabase project + dev Vercel deployment + local run (Q15.7). **MCP = a route in `apps/server`, recorded now, built only in phase 5** (Q15.9). **PWA updates activate on cold start only, never auto-reload**, with a visible version string (Q15.11). **Two Vercel projects, bearer-token auth in a header, no cookies** (Q15.13). **pnpm + Turborepo, pinned pnpm, Node 22, Node runtime not Edge, `packages/shared` kept browser-safe** (Q15.14). New build deliverables: **`docs/ops/SETUP.md`**, a committed **`.env.example`**, and **mini CI on `develop`** with required metric-engine and sync-protocol tests; **`develop` = integration, `main` = production** (§18.1, Q18.2 closed). Phase 0 added to §19.1. | The registry already carries the Zod schemas and descriptions MCP needs, so tRPC would be a second typing layer that still doesn't emit JSON Schema — one abstraction, two consumers. Making the game image a repo asset rather than a stored upload removes an entire subsystem (bucket, upload UI, permissions, offline caching of a binary) in exchange for a yearly commit, and the precache falls out for free — which matters because position data is worthless if the image is missing offline. Immutability is forced by physics, not preference: coordinates are normalized against one specific image, so replacing it silently re-frames history, exactly like renaming a field key. A dev environment is the only protection against testing cascade-delete on real competition data. Cold-start-only updates exist because a service-worker reload mid-match destroys the one screen that cannot be re-created. Cross-origin by construction is why auth is a header token — cookies would drag in CORS credentials and `SameSite` for no gain. The setup guide and `.env.example` exist because handover kills team tools more often than bugs do, and CI exists because the metric engine and the sync protocol are the two places where a regression stays silent until it costs an event. |
+| 2026-08-31 | 3 / 15 | **Generated per-form-version SQL views dropped from v1 → §24** (C1) — amends the 2026-08-14 Option A decision. Flattening happens **only** in the shared TypeScript engine. | The views can only be created after an admin builds a form, so the server would run `CREATE VIEW` against the live database: part of the schema would live outside the repo's migrations (breaking reproducibility), the app would need DDL privileges in production, and there would be **two** implementations of "unpack the JSON into fields" — the TS one every feature uses, and a SQL one nobody tests. Nothing in v1 reads them; the cost is only that ad-hoc SQL must query the JSONB directly, and CSV export covers the rest. |
 | 2026-08-31 | 12 / 5 / 7 / 8 / 19 | **Topic 12 CLOSED.** Alliance selection is **in scope for v1 and moved from phase 3 to phase 2** (Q12.1) — nothing in it depends on the deferred TBA import. **Admin-only editing, everyone else views** (Q12.3); the single exception is a **lead adding a do-not-pick entry with a required reason**, which they may not then edit or remove. Two ordered pick lists (**first** / **second**) per event, drag-reordered and **seeded from a §11.2 saved weight preset**, with **automatic round switching** once all 8 alliances hold a first pick. **Do-not-pick blocks an add outright, but only *flags* a team already on a pick list** — a lead's addition never fails and never reorders the admin's list — and every do-not-pick row has **one-tap removal** that instantly clears the flag. **Alliance bracket entered manually** (Q12.2): 8 alliances × captain/pick1/pick2 + optional **backup**, plus **declined** markers; writes locally and syncs now if online, otherwise on the next sync. **Cross-off is derived** from the bracket and is instant on the admin's device, 45 s for online viewers, sync-time for offline ones — **the admin's device is the declared source of truth during selection** (resolves the §8.2 dependency note). A **list-level `version` guards reorders** as one whole-ordering operation. Printing stays deferred (Q10.4 → §24; Q16.4 open). Role matrix (§5.2), offline-editable set (§7.3) and phasing (§19.1) amended to match. | The 20-minute selection window is the whole point of the two days of scouting, so the design optimises for one person answering "who's next?" in seconds, not for consensus tooling. **Single-editor ownership is the load-bearing choice:** with realtime deferred (§8) and the room usually offline, a shared editable list would produce two devices disagreeing at the worst possible moment — so one device is authoritative and everyone else reads. The lead's do-not-pick exception exists because the people who *notice* a robot is unpickable are the leads watching matches, and the cost of them being able to add a warning is far lower than the cost of that warning never reaching the list. Blocking an add but merely flagging an existing entry keeps the two roles from fighting: a lead can always raise a concern, but only the admin ever changes the order. Deriving cross-off from the bracket instead of storing it means a mistyped pick is corrected in one place and every list fixes itself, the same reason scores are derived from raw entries (§2.2). The list-level version exists because last-write-wins is per-row and an ordering is not a row — without it, two offline reorders would silently destroy one person's work. Moving the feature to phase 2 prevents it from being deferred by association with a TBA import it never needed. |
 | 2026-08-12 | 20 | **AI/MCP is setup only.** Build the two non-deferrable prerequisites (semantic field metadata, transport-agnostic use-case layer) in phase 1. No MCP endpoint, no LLM calls, no AI UI. Phases 5–6 deferred. | Keeps phase 1 small while ensuring the only expensive-to-retrofit pieces exist. Everything deferred is purely additive. |
 | 2026-08-14 | 3 | **Storage = Option A (JSONB payload) with generated per-version views.** | Data volume is tiny for Postgres, so Option B's speed edge is irrelevant, while its costs (runtime DDL, per-table RLS, offline schema-mirroring, and losing multi-season history if old tables are dropped) are exactly what breaks at a venue. A gives B's query ergonomics via generated views without the risk, and is far easier to expose to an LLM (one stable shape + field dictionary). |
@@ -1164,6 +1200,7 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 **Closed 2026-08-15:** Q1.1, Q1.2, Q1.3, Q1.5, Q1.6 → confirmed requirements (**topic 1 CLOSED**).
 **Closed 2026-08-17:** Q2.1 – Q2.7 → confirmed requirements (**topic 2 CLOSED**); Q2.9 closed (own robot = regular robot); Q4.3 closed (flat events, no division hierarchy). Q2.8a–f closed (scoring model fully specified; topic 9 implements); Q4.1 closed (active context); Q17.3 closed (Supabase free tier). **Q3.3 – Q3.8 closed and Q3.10 → §24 (topic 3 CLOSED).**
 **Closed 2026-08-18:** Q4.2 (no event types), Q4.4 (equal event weighting), Q4.5 (no external import / no `source` field) → confirmed requirements (**topic 4 CLOSED**). **Q5.1–Q5.8 → confirmed requirements (topic 5 CLOSED):** three global roles, form templates admin-only / entries open to all, admin-provisioned username+password, admin-only user CRUD + role changes, 5-min self-edit window (offline & online), ~30-day offline session, switch-scouter, no user audit log, **no DB RLS — authz in the use-case layer + UI**. **Q6.1–Q6.8 → confirmed requirements (topic 6 CLOSED):** manual match+team selection (assignments → §24), collapsible phases, sticky display-only match timer (phases on the form), mandatory `robot_status` + status-aware stats, portrait+landscape on phones/tablets, arena-comfort set, practice mode, undo, explicit submit, never-lose-data drafts.
+**Closed 2026-08-31:** Q12.1–Q12.3 (**topic 12 CLOSED**). Q15.3, Q15.5–Q15.7, Q15.9–Q15.14 → confirmed requirements (**topic 15 CLOSED**); Q18.2 closed (mini CI on `develop`). C1 resolved: generated per-form-version SQL views dropped from v1 → §24, amending the 2026-08-14 Option A decision.
 **Closed 2026-08-21:** Q10.1–Q10.10 + Q10.9-ops → confirmed requirements (**topic 10 CLOSED**): full chart set (Recharts + hand-built image/heatmap overlays); dashboards shared when saved / drafts private; per-event or per-season scope, built-ins on active/selected event; phone top-8/bottom-8 for all-teams charts, per-team views to 14 matches; metric selector on shared X + expand-to-stack cap 4; configurable operational stats over app metadata. Export (Q10.4), drill-down (Q10.7), scouted-vs-official (Q10.8), next-year re-map wizard (Q10.3) → §24.
 
 - ~~**Topic 1:** Q1.1 – Q1.6~~ ✓ **CLOSED** — all confirmed in §1.1.
@@ -1180,7 +1217,7 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 - ~~**Topic 12:** Q12.1 – Q12.3~~ ✓ **CLOSED 2026-08-31** — confirmed in §12.2–§12.4. **In scope, moved to phase 2** (Q12.1); alliance results **entered manually**, synced now-or-next-sync (Q12.2); **admin edits, everyone else views**, the one exception being a **lead adding a do-not-pick entry with a required reason** (Q12.3). Two ordered pick lists (first/second) seeded from a §11.2 weight preset, automatic round switch, do-not-pick **blocks** an add but only **flags** a team already on a list, one-tap removal, **8 alliances × captain/pick1/pick2 + backup** with **declined** markers, derived cross-off, and a list-level version guarding reorders. Printing stays deferred (Q10.4 → §24; Q16.4 still open).
 - ~~**Topic 13:** Q13.1 – Q13.5~~ ✓ **CLOSED 2026-08-21** — confirmed in §13.2. Entry validation = **hard block only on out-of-`expected_range` values** (Q13.4); outlier flagging + coverage matrix → §24 (matrix gated on TBA, Q13.1); **no redundant-scouting feature** (conflicts via §7.3 review, keep last, Q13.2); **no scouter reliability score** (Q13.3); **no dedicated bulk-fix tools** (reassign = edit team, merge = resolve conflict, Q13.5); **no full per-entry edit history**. Operational meta-metric catalogue finalized in §10.2; all-dashboard **value-shading (red→green)** color rule added to §10.2.
 - **Topic 14:** Q14.1 – Q14.5
-- **Topic 15:** Q15.1 – Q15.9
+- ~~**Topic 15:** Q15.1 – Q15.14~~ ✓ **CLOSED 2026-08-31** — confirmed in §15.1–§15.2. All traffic through the server API (Q15.1) and the transport-agnostic use-case layer (Q15.8) 2026-08-14; React + Vite PWA (Q15.2) and TypeScript everywhere (Q15.4) 2026-08-14. **Hono, no tRPC** (Q15.3); generated DB types + shared Zod (Q15.5); **no Supabase Storage — the season game image is a static client asset, DB stores only its path** (Q15.6), which also solves offline availability (Q15.12) and carries an immutability rule and a fail-loud rule; full dev environment (Q15.7); MCP as a route in `apps/server`, built in phase 5 only (Q15.9); **generated SQL views dropped → §24** (Q15.10, amends §3.1); cold-start-only PWA updates (Q15.11); two Vercel projects with header bearer-token auth (Q15.13); pnpm/Turborepo, Node 22, Node runtime, browser-safe `packages/shared` (Q15.14).
 - **Topic 16:** Q16.1 – Q16.6
 - **Topic 17:** Q17.1, Q17.2, Q17.4, Q17.5 — ~~Q17.3~~ ✓ CLOSED 2026-08-17 (Supabase free tier)
 - **Topic 18:** Q18.1 – Q18.5
@@ -1197,7 +1234,7 @@ Quick reference for what's still unanswered. Answered questions get struck throu
 6. ~~**Q1.4** — Single team or multi-team?~~ ✓ **CLOSED: single team.**
 7. ~~**Q14.1** — External API import?~~ ✓ **CLOSED: wanted, deferred → §24 nice-to-have.**
 
-All seven top blockers are now closed, and **topics 1–13 are fully CLOSED** — every major *feature* topic is done. Remaining: 14 (TBA import — already deferred to §24, still to be formally closed), 18 (deployment/ops), 19 (delivery phases), and the partials (15/16/17/20). The next work is **build-shaped, not feature-shaped**: close 15/16/17/18/19, then write `SPEC-FINAL.md` and `IMPLEMENTATION-PLAN.md`.
+All seven top blockers are now closed, and **topics 1–13 plus 15 are fully CLOSED** — every feature topic and the system architecture. Remaining: 14 (TBA import — already deferred to §24, still to be formally closed), 18 (deployment/ops — partially answered on the topic 15 close), 19 (delivery phases), and the partials (16/17/20). The next work is **build-shaped, not feature-shaped**: close 16/17/18/19, then write `SPEC-FINAL.md` and `IMPLEMENTATION-PLAN.md`.
 
 ---
 
@@ -1207,6 +1244,7 @@ Every edit is logged here so changes can be audited without reprinting the docum
 
 | Version | Date | Sections touched | Change |
 |---|---|---|---|
+| v0.25 | 2026-08-31 | 0, 0.2, 3.1, 3.2, 15 (closed), 18.1, 18.3, 19.1, 21, 22, 23, 24 | **Topic 15 CLOSED.** Answered Q15.3, Q15.5–Q15.7, Q15.9 and the raised Q15.10–Q15.14. **Hono, no tRPC** — the typed client comes from the use-case registry, which is also what MCP will map. **Generated Supabase DB types + shared Zod.** **No Supabase Storage or uploads in v1:** the season game image is a **static client asset** (`apps/client/public/seasons/<year>/`), the DB stores only its path, the service worker precaches it — which also closes offline availability (Q15.12); added the **immutable-once-entries-exist** rule and the **fail-loud on missing image** rule. **Full dev environment** (dev Supabase + dev Vercel + local). **MCP = a route in `apps/server`, built only in phase 5.** **PWA updates on cold start only, never auto-reload**, visible version string. **Two Vercel projects, bearer-token auth in a header, no cookies.** **pnpm + Turborepo, pinned pnpm, Node 22, Node runtime not Edge, `packages/shared` kept browser-safe.** **C1: generated per-form-version SQL views dropped from v1 → §24**, amending §3.1/§3.2 — flattening lives only in the shared TS engine. New confirmed requirements in §18.1: **`docs/ops/SETUP.md`**, a committed **`.env.example`** (what/where-from/which side/which environment), **mini CI on `develop`** with required metric-engine and sync-protocol tests, and the **`develop`/`main` branch model** (Q18.2 closed). Added **Phase 0 — Foundations** to §19.1. `COLLABORATION.md` updated to v1.3 for the branch model. |
 | v0.24 | 2026-08-31 | 0, 0.2, 5.2, 7.3, 7.4, 8.2, 12 (rewritten & closed), 19.1, 21, 22, 23 | **Topic 12 CLOSED.** Answered Q12.1–Q12.3 and rewrote §12 into confirmed decisions (§12.2), a data model (§12.3), the three pages (§12.4) and closed questions (§12.5). In scope, **moved from phase 3 to phase 2**. **Admin-only editing, all other roles view**; a **lead may add a do-not-pick entry with a required reason** only. Two ordered pick lists (first/second) seeded from a §11.2 weight preset with automatic round switching. Do-not-pick **blocks** adding a listed team but only **flags** one already on a list; **one-tap removal** clears the flag. **Alliance bracket entered manually** — 8 × captain/pick1/pick2 + backup, **declined** markers — written locally and synced now-or-next-sync. **Cross-off derived** from the bracket; admin's device is the source of truth during selection (**resolves the §8.2 realtime dependency note**). **List-level `version`** guards whole-ordering reorders against §7.3's per-row last-write-wins. Printing stays deferred (Q10.4 → §24; Q16.4 open). Amended §5.2 (two new matrix rows), §7.3/§7.4 (offline-editable set now covers do-not-pick + bracket) and §19.1 (phases 2 and 3). |
 | v0.1 | 2026-08-12 | all | Base document created from the initial requirements. 19 topics, ~100 questions. Added the fixed/flexible domain split (topic 2), venue-connectivity reality (topic 7.2), form versioning (topic 3.3), external API import (topic 14), pick list (topic 12) and data quality (topic 13) as items not in the original brief. |
 | v0.2 | 2026-08-12 | 0.2, 3.2, 3.3, 3.4, 15.2, 15.3, 19.1, 22 | Added topic 20 (AI/LLM/MCP). Added semantic field metadata to 3.3 with Q3.9–Q3.10. Added transport-agnostic use-case layer to 15.2 with Q15.8–Q15.9. Noted that the MCP goal strengthens the JSONB recommendation in 3.2. Added phases 5–6. |
@@ -1240,6 +1278,7 @@ Confirmed as **wanted but deliberately out of current scope** — revisit later.
 
 | Item | Source | Note |
 |---|---|---|
+| **Generated per-form-version SQL views** — a flat, typed view per form version so analytics can be written as ordinary SQL | C1 / Q15.10, topics 3 & 15 | Wanted for ad-hoc querying, not now. Requires the server to run `CREATE VIEW` at form-publish time, which puts part of the schema outside the repo's migrations and duplicates the shared TS engine's flattening. Nothing in v1 reads them; ad-hoc SQL queries the JSONB directly. Revisit if hand-written analytics queries become a regular chore. |
 | **External data import (TBA / FRC Events API)** — event, team, schedule and result import | Q14.1, topic 14 | Wanted, not now. Deferring it also defers schedule-driven **scouter assignments** (Q6.1/Q6.2) and **official-result validation** (topic 13), which depend on it. |
 | **Layer-2 derived FRC statistics** — OPR, DPR, CCWM, win rate, avg ranking points, schedule strength, computed from official match scores | Q9.3, topic 9 | Wanted, not now. A cross-check on scouting data; depends on the TBA import above. v1 ships Layer-1 metrics (from scouting) only. |
 | **Schedule-driven scouter assignments** — auto-fill "you are watching Red 2, team 1577" per match | Q6.1/Q6.2, topic 6 | Wanted, not now. When built it is **station-based** (fixed station → fixed alliance slot). Depends on the imported match schedule above. v1 uses manual match + team selection. |
