@@ -13,7 +13,7 @@ Year-agnostic scouting app for an FRC team. Currently in the **specification pha
 2. **Use plan mode before every non-trivial edit.** Plan, get approval, then execute one task.
 3. **One task at a time.** Stop after each so I can review the diff and commit.
 4. **Verify before claiming done.** Run the command, read the output, then report. Never say something works without having seen it work.
-5. **Verify long deliverables with subagents.** After drafting any document over ~200 lines, or completing a build task, run an independent verification pass with subagents before presenting the result — a fresh reader catches what the drafting pass quietly dropped. Report what they found and what you changed.
+5. **Offer a subagent verification pass — don't run one automatically.** When a deliverable is long or intricate enough that a fresh reader would likely catch something the drafting pass dropped, say so and ask. Only run it if I say yes, then report what it found and what changed.
 6. **Never touch the production Supabase project.** Development work uses the dev project only.
 7. **Migrations live in the repo** and are applied by CLI. Never hand-edit a schema in the Supabase dashboard.
 8. **Secrets stay in server environment variables.** Never in the client, never committed.
