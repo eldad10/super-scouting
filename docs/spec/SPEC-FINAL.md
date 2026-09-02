@@ -937,7 +937,7 @@ It holds exactly the entities the delta pull returns, plus device-local state:
 | `metrics`, `dashboards`, `dashboard_charts`, `weight_presets` for that season | Saved dashboards are viewable from cache offline. |
 | Every `users` row, including `password_hash` | For offline login and switch-scouter (§7.5). Not event-scoped. |
 | The outbox | Pending operations (§9.4). |
-| Per-record sync state | `{row_id, sync_state: 'pending' \| 'acked', acked_at, origin: 'local' \| 'qr'}` — the representation behind the durability rule (§9.4), the QR TTL (§9.8) and the wipe guard (§9.9). |
+| Per-record sync state | `{row_id, sync_state: 'pending' \| 'acked', acked_at, origin: 'local' \| 'qr'}` — the representation behind the durability rule (§9.4), QR-copy disposal (§9.8) and the wipe guard (§9.9). |
 | Drafts, and separately practice drafts | §8.3, §8.5. |
 | The auth token and the pull watermark | |
 
@@ -1136,16 +1136,20 @@ The receiver collects frames by index and completes when it holds all N. Order d
 **Semantics.**
 
 - QR transfer is **additive and idempotent**. Scanning copies records to the receiver **with their original UUIDs, author and client timestamps** — never re-authored.
-- **Where the copies land:** each received operation is written into **both** the receiver's local dataset (so its offline statistics include them) **and** its outbox, marked `origin: 'qr'`. The receiver can therefore push them, and the TTL below can find them.
+- **Where the copies land:** each received operation is written into **both** the receiver's local dataset (so its offline statistics include them) **and** its outbox, marked `origin: 'qr'`. The receiver can therefore push them, and the disposal rule below can find them.
 - The receiver pushes them under its own bearer token, and `syncPush` authorizes each one against its own `author_user_id` (§7.5) — which is what makes a collector tablet work at all.
 - **The sender keeps its outbox pending.** A QR scan is a backup hop, not a confirmed sync, so the data now exists on both devices and is strictly more durable.
 - When either device later reaches the internet, each uploads independently. Because the server keys on `row_id`, a second upload of the same record is an **idempotent upsert** resolved by the base-version rule: a no-op if identical, a fast-forward if linear, and flagged only on genuine divergence. Never a duplicate row.
 - No device needs to be designated "the syncer", and re-scanning the same batch is harmless.
 - The receiver shows a running count of frames collected and a clear "batch complete" state.
 
-**TTL on transferred copies.** A record whose sync state is `origin: 'qr'` is **hard-deleted from that device 2 hours after `acked_at`**. It is never deleted before the ack — the durability rule of §9.4 is absolute, and a QR copy that has never reached the cloud is kept indefinitely. This keeps a central collector tablet from accumulating every scouter's records for the whole weekend. Records the device created itself (`origin: 'local'`) are not subject to the TTL; they are pruned from the outbox on ack and remain in the local dataset as ordinary cached rows.
+**Disposal of transferred copies — on ack, not on a timer.** A record whose sync state is `origin: 'qr'` is **discarded from the receiving device the moment its cloud acknowledgment arrives**. There is no TTL and no waiting period.
 
-The sweep runs on app open and every 15 minutes while the app is foregrounded.
+- **Never before the ack.** The durability rule of §9.4 is absolute: a QR copy that has not reached the cloud is kept indefinitely, however long that takes.
+- **On ack**, the copy is removed from the receiver's outbox and its `origin: 'qr'` marker is cleared. The row itself remains in the local dataset as an ordinary cached row of the active competition — which is exactly what the next delta pull would hand the device anyway — so the collector tablet's own statistics stay correct and complete.
+- Records the device created itself (`origin: 'local'`) behave identically: pruned from the outbox on ack, retained in the dataset.
+
+**Manual escape hatch.** The sync page carries a **"discard received QR data"** action for when something has gone wrong — a corrupt batch, a device handed over mid-event, a scan from the wrong event. It removes every `origin: 'qr'` record on the device and is **refused for any record without a cloud ack**, the same guard as the device wipe (§9.9). It reports how many records it would refuse and stops rather than partially clearing.
 
 ### 9.9 Lead-approved local wipe
 
@@ -1693,7 +1697,7 @@ frc-scouting/
   docs/
     spec/                         # the living spec, SPEC-FINAL.md
     plans/                        # implementation plans
-    ops/                          # SETUP.md, RUNBOOK.md
+    ops/                          # SETUP.md, RUNBOOK.md, ENVIRONMENT.md
     brand/                        # brand source assets (§17.5)
   .github/
     workflows/                    # CI, and the twice-weekly keep-alive
@@ -2068,7 +2072,9 @@ A pull request into `main` cannot merge unless the run is green.
 - Pre-event: run `supabase db dump`; open the app 48 hours before the event and confirm it loads; verify the offline path with the network actually off, on a real phone.
 - Daily: confirm every device has synced at least once.
 
-**Two committed `.env.example` files — one per app — are the connection contract.** See Appendix B.
+**`docs/ops/ENVIRONMENT.md`** — the committed environment and secrets worksheet: every variable and secret, what it is, where it comes from, which environment it belongs to, an editable column for the non-secret values, and a tick box per item. It carries the standing rule that **no secret value is ever written into the repo or a conversation**. It exists before phase 0 so provisioning has something to work through.
+
+**Two committed `.env.example` files — one per app — are the connection contract**, generated from that worksheet in phase 0. See Appendix B.
 
 ### 19.6 Scheduled work
 
@@ -2100,7 +2106,7 @@ The Vercel, Supabase and GitHub accounts are currently **personal**, with the in
 
 **Phase 0 — Foundations**
 
-Monorepo scaffold (pnpm + Turborepo, Node 22) → dev and production Supabase projects → **the complete §3 database schema as migrations**, plus the `updated_at` trigger and the generated DB types → the two Vercel projects → `docs/ops/SETUP.md`, `docs/ops/RUNBOOK.md` and the two per-app `.env.example` files → CI on `develop`, including auto-applying migrations to dev → the `/health` endpoint and its twice-weekly keep-alive → the dev seed script.
+Monorepo scaffold (pnpm + Turborepo, Node 22) → dev and production Supabase projects → **the complete §3 database schema as migrations**, plus the `updated_at` trigger and the generated DB types → the two Vercel projects → `docs/ops/SETUP.md`, `docs/ops/RUNBOOK.md` and the two per-app `.env.example` files generated from `docs/ops/ENVIRONMENT.md` → CI on `develop`, including auto-applying migrations to dev → the `/health` endpoint and its twice-weekly keep-alive → the dev seed script.
 
 **Phase 1 — Core loop (must exist before any event)**
 
@@ -2228,6 +2234,10 @@ Nothing on this list is built. It is here so the plan never re-adds an item by i
 ## Appendix B — Environment & secrets contract
 
 Two committed `.env.example` files are the connection contract. **They hold names and placeholders, never real values.** Each entry documents what it is, where to obtain it, and which environment it belongs to.
+
+**`docs/ops/ENVIRONMENT.md` is the editable worksheet** that tracks provisioning: the same inventory, plus a non-secret value column and a tick box per item. The two `.env.example` files are generated from it in phase 0.
+
+**No secret value is ever written into this repository, a commit message, or a conversation.** A secret exists in exactly two places — the dashboard that issued it and the dashboard that consumes it — and travels between them by copy-paste in a browser. What the build needs from the maintainer is only the **non-secret** identifiers (project refs, deployment URLs) and confirmation that each secret is set. Correctness of a value is proved by running it: the `/health` endpoint and the CI smoke suite (§18.4), never by inspection.
 
 ### B.1 `apps/client/.env.example`
 
@@ -2364,7 +2374,7 @@ Every one of these is a decision that was **made** during consolidation because 
 | D11 | Practice-mode drafts | A separate IndexedDB store, cleared on exit from practice mode | §8.5 |
 | D12 | QR encoding parameters | fflate deflate, 2,300-byte frames, QR v40/EC-M byte mode, cyclic repeat at 5 fps, 200-op batch cap | §9.8 |
 | D13 | Device wipe code | `VITE_DEVICE_WIPE_CODE`, explicitly not a secret | §9.9 |
-| D14 | QR-copy TTL | 2 hours **after cloud ack**, never before — the durability rule is absolute | §9.8 |
+| D14 | Disposal of QR copies | **On cloud ack, with no TTL** — never before the ack, plus a manual "discard received QR data" action guarded the same way as the device wipe | §9.8 |
 | D15 | Parent-deleted records | Client hard-deletes, but raises a notice naming exactly what was discarded and logs it locally | §9.7 |
 | D16 | User deletion | Implemented as `disabled_at`, so authorship survives | §3.2, §7.3 |
 | D17 | Super-scouting coverage denominator | Teams with a recorded entry, not matches — follows from (team, event) cardinality | §12.7 |
