@@ -1078,13 +1078,15 @@ Chosen by walking real products, surface by surface (Q16.3, 2026-09-01). **These
 
 Build chats invoke Anthropic's `frontend-design` skill (`/plugin install frontend-design@claude-plugins-official`) on UI tasks. It is worth having, and it needs one standing override, because its stated purpose — *"bold aesthetic choices, distinctive typography and colour palettes, high-impact animations"*, giving a product an identity that could not be mistaken for anyone else's — is a job this project has already done and closed.
 
-| Use the skill for | Do **not** use the skill for |
+| Section of the skill | Use it? |
 |---|---|
-| Spacing rhythm and vertical hierarchy | Choosing a palette — §16.2's ten tokens are fixed, at exact hex, in two themes |
-| Information density and scan-ability | Choosing typefaces — Inter + Noto Sans Hebrew, closed at Q16.7 |
-| Empty, loading and error state design | Inventing a look for a surface that already has a reference in §16.3 |
-| Focus, hit-area and touch affordance | Decorative motion of any kind on the scouter's path |
-| Component polish and restraint | Anything that lowers the §16.1 accessibility floor |
+| **Ground it in the subject** | **No.** The subject, the audience and each page's job are fixed by §16.3's reference table. Nothing here needs pinning down. |
+| **Design principles** → *Structure is information* | **Yes.** Numbering, eyebrows, dividers and labels must encode something true about the content, not decorate it. |
+| **Design principles** → *hero is a thesis*, *typography carries the personality*, *leverage motion* | **No.** There are no heroes in this app; the two typefaces are closed at Q16.7; and page-load sequences, scroll reveals and "ambient atmosphere" are exactly what must not appear on a scouter's screen. |
+| **Process** → the two-pass plan-then-critique habit, and the CSS-specificity warning | **Yes.** Plan the screen, criticise the plan, then build. The warning about `.section` and `.cta` selectors cancelling each other is real and cheap to heed. |
+| **Process** → *"describe the palette as 4–6 named hex values… the typefaces for 2+ roles"* | **No.** That is §16.2 and Q16.7, already decided. Producing a second palette is the single most likely way this skill damages the project. |
+| **Restraint and self-critique** | **Yes, entirely.** "Spend your boldness in one place", the quality floor — responsive to mobile, visible keyboard focus, **reduced motion respected** — and Chanel's mirror. |
+| **More on writing in design** | **Yes, entirely, and read it twice.** It is the best guidance in the skill and it *reinforces* §16.1: errors that explain rather than apologise, an empty screen as an invitation to act, one name for an action through a whole flow, labels that do exactly one job. |
 
 Two hard rules follow from the arena, not from taste:
 
