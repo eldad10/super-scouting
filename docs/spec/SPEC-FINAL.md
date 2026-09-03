@@ -1,6 +1,8 @@
 # SPEC-FINAL — FRC Scouting Platform (ROBACTIVE #2096)
 
-**Version:** 1.0 · **Date:** 2026-09-02 · **Derived from:** `frc-scouting-app-spec.md` v0.34 (topics 1–20 CLOSED)
+**Version:** 1.1 · **Date:** 2026-09-03 · **Derived from:** `frc-scouting-app-spec.md` v0.35 (topics 1–20 CLOSED)
+
+*v1.1 amends §17.9 only, adding the standing override for the `frontend-design` skill — craft yes, identity no. No requirement changed; see the living spec's §21 for the rationale.*
 
 **What this document is.** The complete, self-contained build input for `IMPLEMENTATION-PLAN.md`. Every confirmed requirement, restated in full. Nothing here needs the living spec to be understood.
 
@@ -1932,6 +1934,8 @@ The supplied logo is **raster, not vector**. It is large enough for every use in
 | Admin: users, seasons, events | **Clerk** | Table → row opens a detail page; role is a select on that page; creation is one small form. Destructive rows follow the single pattern above. |
 
 **Standing reference libraries for the build phase:** [mobbin.com](https://mobbin.com), [godly.website](https://godly.website), [ui.shadcn.com/blocks](https://ui.shadcn.com/blocks). When a screen has no rule above, look there before inventing one.
+
+**The `frontend-design` skill: craft yes, identity no.** Build chats invoke Anthropic's `frontend-design` skill on UI tasks. Use its **Restraint and self-critique** and **More on writing in design** sections in full — the second reinforces the six-variant state component of §17.8 — plus *Structure is information* and the two-pass plan-then-critique habit. **Ignore its *Ground it in the subject* and *Process* token-invention steps entirely**: they ask for a 4–6 value palette and two or more typefaces, which is precisely what §17.4 and §17.6 already fix. Do **not** use it to choose an identity: the palette is the ten tokens of §17.4 at exact hex in two themes, the typefaces are §17.6's Inter + Noto Sans Hebrew, and each surface's reference is the table above. Components read CSS variables and never hard-code a hex; brand yellow never appears in data ink and never sits on a light surface. **No decorative animation on the data-entry path** — motion is permitted only where it carries information a scouter must notice, never as ornament, because the primary surface is a phone held in one hand in a loud arena during 2:30 of match. **Where the skill and §17 disagree, §17 wins**, and the build chat names the line that disagreed rather than silently picking one.
 
 **Printing is out of scope.** There are no print stylesheets and no printable views.
 
