@@ -421,7 +421,7 @@ export * from './version';
 pnpm test && pnpm typecheck && pnpm lint && pnpm format:check
 ```
 
-Expected: `Test Files  1 passed (1)` and every suite green, including the new file(s) from this task; turbo reports success for `typecheck` and `lint`; prettier prints `All matched files use Prettier code style!`.
+Expected: the shared suite green; turbo reports success for `typecheck` and `lint`; prettier prints `All matched files use Prettier code style!`.
 
 - [ ] **Step 7: Commit**
 
@@ -775,7 +775,7 @@ git add -A && git commit -m "feat(shared): add the caller contract, error codes 
 - Create: `apps/server/src/config.ts`, `apps/server/src/config.test.ts`
 - Create: `apps/server/src/db/client.ts`, `apps/server/src/db/ping.ts`
 - Create: `apps/server/src/app.ts`, `apps/server/src/app.test.ts`
-- Create: `apps/server/src/dev-server.ts`, `apps/server/api/index.ts`
+- Create: `apps/server/src/dev-server.ts`, `apps/server/src/composition.ts`, `apps/server/api/index.ts`
 
 **Interfaces:**
 - Consumes: `@frc/shared`.
@@ -1164,7 +1164,6 @@ serve({ fetch: buildApp().fetch, port: 3000 }, (info) => {
 });
 ```
 
-Add `apps/server/src/composition.ts` to the Files list above.
 
 - [ ] **Step 5: Run the tests and watch them pass**
 
@@ -1185,7 +1184,7 @@ git add -A && git commit -m "feat(server): add the typed config module, the Hono
 ## Task 0.4: Client skeleton — Vite, React, Tailwind v4, shadcn/ui, theme tokens, typed config
 
 **Files:**
-- Create: `apps/client/package.json`, `apps/client/tsconfig.json`, `apps/client/tsconfig.node.json`, `apps/client/vite.config.ts`, `apps/client/index.html`, `apps/client/vitest.config.ts`, `apps/client/components.json`
+- Create: `apps/client/package.json`, `apps/client/tsconfig.json`, `apps/client/tsconfig.app.json`, `apps/client/tsconfig.node.json`, `apps/client/vite.config.ts`, `apps/client/index.html`, `apps/client/vitest.config.ts`, `apps/client/components.json`, `apps/client/src/test/setup.ts`
 - Create: `apps/client/src/main.tsx`, `apps/client/src/App.tsx`, `apps/client/src/styles/tokens.css`, `apps/client/src/styles/index.css`, `apps/client/src/lib/utils.ts`
 - Create: `apps/client/src/config.ts`, `apps/client/src/config.test.ts`, `apps/client/src/styles/tokens.test.ts`
 
@@ -1276,8 +1275,6 @@ git add -A && git commit -m "feat(server): add the typed config module, the Hono
 }
 ```
 
-Add `"tsconfig.app.json"` to the Files list.
-
 `apps/client/vite.config.ts`:
 
 ```ts
@@ -1347,7 +1344,7 @@ export default defineConfig({
 });
 ```
 
-`apps/client/src/test/setup.ts` (add to Files):
+`apps/client/src/test/setup.ts`:
 
 ```ts
 import 'fake-indexeddb/auto';
@@ -1471,11 +1468,15 @@ describe('theme tokens (SPEC-FINAL 17.4)', () => {
     }
   });
 
-  it('never puts brand yellow anywhere in the shading ramp', () => {
+  it('never puts brand yellow anywhere in the shading ramp, in EITHER theme', () => {
     const ramp = ['--shade-worst', '--shade-mid', '--shade-best'];
-    for (const token of ramp) expect(css, token).toContain(`${token}:`);
-    const rampValues = ramp.map((t) => css.slice(css.indexOf(`${t}:`), css.indexOf(`${t}:`) + 24));
-    for (const value of rampValues) expect(value.toUpperCase()).not.toContain('FFEA07');
+    for (const theme of [css.slice(0, outdoorAt), css.slice(outdoorAt)]) {
+      for (const token of ramp) {
+        expect(theme, token).toContain(`${token}:`);
+        const value = theme.slice(theme.indexOf(`${token}:`), theme.indexOf(`${token}:`) + 24);
+        expect(value.toUpperCase(), token).not.toContain('FFEA07');
+      }
+    }
   });
 });
 ```
@@ -2206,19 +2207,23 @@ git add -A && git commit -m "feat(ops): generate both .env.example files from th
 
 ```ts
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { missingHeadings, REQUIRED } from './check-docs.mjs';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('required ops documentation (SPEC-FINAL 19.5)', () => {
   it('every required document carries every required section', () => {
     for (const [path, required] of Object.entries(REQUIRED)) {
-      expect(missingHeadings(readFileSync(path, 'utf8'), required), path).toEqual([]);
+      expect(missingHeadings(readFileSync(join(ROOT, path), 'utf8'), required), path).toEqual([]);
     }
   });
 
   it('no required document contains a value that looks like a secret', () => {
     for (const path of Object.keys(REQUIRED)) {
-      const text = readFileSync(path, 'utf8');
+      const text = readFileSync(join(ROOT, path), 'utf8');
       expect(text, path).not.toMatch(/eyJ[A-Za-z0-9_-]{20,}/); // a JWT-shaped string
       expect(text, path).not.toMatch(/sb[ps]_[A-Za-z0-9]{20,}/); // a Supabase key
     }
@@ -2245,6 +2250,7 @@ Expected: `ENOENT: no such file or directory, open 'docs/ops/SETUP.md'`.
 ```js
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const REQUIRED = {
@@ -2279,10 +2285,12 @@ export function missingHeadings(text, required) {
   return required.filter((h) => !headings.includes(h));
 }
 
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
 export function main() {
   let failed = false;
   for (const [path, required] of Object.entries(REQUIRED)) {
-    const missing = missingHeadings(readFileSync(path, 'utf8'), required);
+    const missing = missingHeadings(readFileSync(join(ROOT, path), 'utf8'), required);
     if (missing.length > 0) {
       failed = true;
       console.error(`${path} is missing sections: ${missing.join(', ')}`);
@@ -2344,8 +2352,8 @@ still holds unacknowledged entries is a loss.
 
 - [ ] Run `supabase db dump` and save the file off-platform. **Not optional.**
 - [ ] 48 hours before: open the app and confirm it loads (this also wakes the database).
-- [ ] Verify the offline path on a real phone with the network actually off —
-      follow `docs/ops/OFFLINE-CHECK.md` end to end.
+- [ ] Verify the offline path on a real phone with the network actually off.
+      (Task 1.63 turns this line into a numbered procedure in `OFFLINE-CHECK.md`.)
 - [ ] Confirm every scouting device has hydrated the event while on wifi.
 - [ ] Confirm every device shows the same version string on the context page.
 
@@ -3780,7 +3788,8 @@ git add -A && git commit -m "feat(db): add the alliance-selection schema"
 ## Task 0.13: Generated database types, committed and drift-checked
 
 **Files:**
-- Create: `packages/db/src/database.types.ts` (generated), `packages/db/src/index.ts`
+- Create: `packages/db/src/database.types.ts` (generated)
+- Modify: `packages/db/src/index.ts` (replacing task 0.8's placeholder)
 - Create: `packages/db/test/types-drift.itest.ts`
 - Modify: `packages/db/package.json`, `apps/server/src/db/client.ts`
 
@@ -3933,6 +3942,15 @@ describe('dev seed (SPEC-FINAL 19.7)', () => {
     expect(rules.data!.length).toBeGreaterThan(0);
   });
 
+  it('gives the match form its fields too — the ids must not collide across versions', async () => {
+    for (const versionId of [SEED.formVersionOld, SEED.formVersion]) {
+      const fields = await db.from('form_fields').select('key').eq('form_version_id', versionId);
+      expect(fields.data!.map((f) => f.key).sort(), versionId).toEqual(
+        ['auto_left_zone', 'auto_notes', 'endgame_climb', 'notes', 'teleop_notes'],
+      );
+    }
+  });
+
   it('creates a published super form with its own fields, so both v1 kinds exist', async () => {
     const form = await db.from('forms').select('kind, active_version_id').eq('id', SEED.superForm).single();
     expect(form.data!.kind).toBe('super');
@@ -4024,6 +4042,9 @@ export const SEED = Object.freeze({
   match: (number: number): string => id(2000 + number),
   matchTeam: (number: number, slot: number): string => id(20000 + number * 10 + slot),
   entry: (index: number): string => id(50000 + index),
+  /** Unique per (form version, field index) — see the note in seed.ts. */
+  formField: (versionIndex: number, fieldIndex: number): string =>
+    id(60000 + versionIndex * 100 + fieldIndex),
   /** bcrypt hash of the password "seedpass1" at cost 10. Dev only. */
   passwordHash: '$2a$10$Vv3nJXsX0G2xh0m0Y6mCkuJ0iH5wLZ0Q0y2xJ4bqz2s5g3lI1nqhK',
 });
@@ -4098,7 +4119,7 @@ export const SEED_SUPER_FIELDS: SeedField[] = [
 ```ts
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '../database.types';
-import { SEED, SEED_FIELDS } from './fixtures';
+import { SEED, SEED_FIELDS, SEED_SUPER_FIELDS } from './fixtures';
 
 export type SeedOptions = { requireUrlToContain?: string };
 
@@ -4192,14 +4213,18 @@ export async function seedDevDatabase(
     .update({ active_version_id: SEED.superFormVersion })
     .eq('id', SEED.superForm);
 
-  for (const [versionId, fields] of [
+  // The field id must be unique PER VERSION. Deriving it from the version id by
+  // string surgery collapsed all three versions onto one id set, and the upserts
+  // then overwrote each other — leaving the match form with no fields at all,
+  // silently, because only the last pass survived. Use the fixture allocator.
+  for (const [versionIndex, [versionId, fields]] of [
     [SEED.formVersionOld, SEED_FIELDS],
     [SEED.formVersion, SEED_FIELDS],
     [SEED.superFormVersion, SEED_SUPER_FIELDS],
-  ] as const) {
+  ].entries()) {
     await db.from('form_fields').upsert(
       fields.map((f, i) => ({
-        id: `${versionId.slice(0, -3)}${String(700 + i).padStart(3, '0')}`,
+        id: SEED.formField(versionIndex, i),
         form_version_id: versionId,
         key: f.key,
         label: f.label,
@@ -6210,7 +6235,7 @@ export function buildApp(): Hono {
 pnpm --filter @frc/server exec vitest run && pnpm vitest run packages/shared && pnpm typecheck
 ```
 
-Expected: every suite green, including the new file(s) from this task in `apps/server` (11 from task 0.3 plus 16 here); every suite green, including the new file(s) from this task in shared (32 plus the nine `entryShape` cases); typecheck clean.
+Expected: every suite green in `apps/server` and in shared, including the new `syncPush` and `entryShape` files; typecheck clean.
 
 - [ ] **Step 7: Commit**
 
@@ -6632,8 +6657,9 @@ git add -A && git commit -m "feat(server): add syncPull with the delta watermark
 
 **Files:**
 - Create: `apps/client/src/data/db.ts`, `apps/client/src/data/outbox.ts`, `apps/client/src/data/outbox.test.ts`
-- Modify: `apps/client/package.json` (add `"dexie": "^4.0.10"`, `"fake-indexeddb": "^6.0.0"` as a devDependency), `apps/client/vitest.config.ts` (setup file)
-- Create: `apps/client/src/test/setup.ts`
+- Modify: `apps/client/package.json` (add `"dexie": "^4.0.10"`)
+
+**`fake-indexeddb`, `src/test/setup.ts` and the `setupFiles` line already exist** — task 0.4 created all three. This task adds only Dexie.
 
 **Interfaces:**
 - Consumes: `Operation`, `isAck`, `type PushResult`.
