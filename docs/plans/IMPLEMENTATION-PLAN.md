@@ -10872,7 +10872,7 @@ export async function setActiveEvent(
 
 `getActiveContext` is a query every role — and a `service` caller — may call.
 
-- [ ] **Step 4: Run and watch pass**
+- [ ] **Step 6: Run and watch pass**
 
 ```bash
 pnpm --filter @frc/server exec vitest run && pnpm typecheck
@@ -10880,7 +10880,7 @@ pnpm --filter @frc/server exec vitest run && pnpm typecheck
 
 Expected: every suite green, including the new file(s) from this task.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A && git commit -m "feat(server): add season, event and active-context use cases"
