@@ -11835,20 +11835,88 @@ describe('semantic metadata (SPEC-FINAL 3.3, 5.4)', () => {
 Add to `packages/shared/src/forms/validate.test.ts`:
 
 ```ts
+import { describe, expect, it } from 'vitest';
+import type { FormFieldDefinition } from './types';
+import { validateEntryData } from './validate';
+
+const f = (over: Partial<FormFieldDefinition>): FormFieldDefinition => ({
+  id: 'f', key: 'k', label: 'L', help_text: null, type: 'counter', section: null, display_order: 1,
+  required: false, default_value: null, config: {}, visibility_condition: null, deprecated: false,
+  description: 'x', unit: 'count', phase: 'auto', direction: 'neutral', category: null,
+  expected_range: null, include_in_ai_context: null, is_ordinal: null, ...over,
+});
+
+const ok = (field: FormFieldDefinition, value: unknown) =>
+  validateEntryData([field], 'played', { [field.key]: value }).ok;
+
 describe('validateEntryData over the whole catalogue', () => {
-  it('accepts a rating inside its configured max and rejects one above it');
-  it('accepts a timer as a number of seconds and as null when the scouter is unsure');
-  it('accepts an event log as {type, t} taps with a known event type, in ascending t');
-  it('accepts a position as one or many normalized {x, y} pairs inside 0..1');
-  it('rejects a position outside 0..1, because coordinates are normalized to the image');
-  it('accepts a cycle path as a list of cycles and caps points per cycle at max_points_per_cycle');
-  it('ignores a computed field on input — its value is written by the engine, never typed');
-  it('ignores a section entirely — it holds no data');
-  it('accepts a multi select whose values are all in the option list, and rejects one that is not');
+  it('accepts a rating inside its configured max and rejects one above it', () => {
+    const rating = f({ key: 'skill', type: 'rating', config: { max: 5, style: 'stars' } });
+    expect(ok(rating, 4)).toBe(true);
+    expect(ok(rating, 6)).toBe(false);
+    expect(ok(rating, 0)).toBe(false);
+  });
+
+  it('accepts a timer as seconds, and accepts its absence when the scouter is unsure', () => {
+    const timer = f({ key: 'climb_time', type: 'timer', unit: 'seconds', config: { allow_unsure: true } });
+    expect(ok(timer, 12.5)).toBe(true);
+    expect(ok(timer, -1)).toBe(false);
+    expect(validateEntryData([timer], 'played', {}).ok).toBe(true);
+  });
+
+  it('accepts an event log as {type, t} taps with a known type, in ascending t', () => {
+    const log = f({
+      key: 'events', type: 'event_log', unit: 'count',
+      config: { event_types: [{ value: 'score', label: 'Score' }, { value: 'miss', label: 'Miss' }] },
+    });
+    expect(ok(log, [{ type: 'score', t: 10 }, { type: 'miss', t: 20 }])).toBe(true);
+    expect(ok(log, [{ type: 'score', t: 20 }, { type: 'score', t: 10 }])).toBe(false);
+    expect(ok(log, [{ type: 'defence', t: 10 }])).toBe(false);
+  });
+
+  it('accepts a position as normalized {x, y} pairs inside 0..1', () => {
+    const single = f({ key: 'shot', type: 'position', unit: 'coordinate', config: { multi_point: false, mirror_axis: 'horizontal' } });
+    const many = f({ key: 'shots', type: 'position', unit: 'coordinate', config: { multi_point: true, mirror_axis: 'horizontal' } });
+    expect(ok(single, { x: 0.25, y: 0.75 })).toBe(true);
+    expect(ok(many, [{ x: 0, y: 0 }, { x: 1, y: 1 }])).toBe(true);
+    expect(ok(single, [{ x: 0.1, y: 0.1 }, { x: 0.2, y: 0.2 }])).toBe(false);
+  });
+
+  it('rejects a position outside 0..1, because coordinates are normalized to the image', () => {
+    const point = f({ key: 'shot', type: 'position', unit: 'coordinate', config: { multi_point: false, mirror_axis: 'none' } });
+    expect(ok(point, { x: 1.4, y: 0.5 })).toBe(false);
+    expect(ok(point, { x: -0.1, y: 0.5 })).toBe(false);
+  });
+
+  it('accepts a cycle path as a list of cycles and caps points per cycle', () => {
+    const path = f({ key: 'cycles', type: 'cycle_path', unit: 'coordinate', config: { max_points_per_cycle: 3, mirror_axis: 'none' } });
+    expect(ok(path, [[{ x: 0.1, y: 0.1 }, { x: 0.2, y: 0.2 }]])).toBe(true);
+    expect(ok(path, [[{ x: 0.1, y: 0.1 }, { x: 0.2, y: 0.2 }, { x: 0.3, y: 0.3 }, { x: 0.4, y: 0.4 }]])).toBe(false);
+  });
+
+  it('accepts a computed key without validating it — the engine writes that value, never the scouter', () => {
+    const computed = f({ key: 'total', type: 'computed', unit: 'points', config: { expression: null, result_type: 'float' }, required: true });
+    expect(validateEntryData([computed], 'played', { total: 17 }).ok).toBe(true);
+    expect(validateEntryData([computed], 'played', {}).ok).toBe(true);
+  });
+
+  it('ignores a section entirely — it holds no data and is never required', () => {
+    const section = f({ key: 'auto_header', type: 'section', required: true, description: null, unit: null, phase: null, direction: null });
+    expect(validateEntryData([section], 'played', {}).ok).toBe(true);
+  });
+
+  it('accepts a multi select whose values are all in the option list, and rejects one that is not', () => {
+    const multi = f({
+      key: 'defended', type: 'multi_select', unit: 'enum', is_ordinal: false,
+      config: { options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] },
+    });
+    expect(ok(multi, ['a', 'b'])).toBe(true);
+    expect(ok(multi, [])).toBe(true);
+    expect(ok(multi, ['a', 'c'])).toBe(false);
+  });
 });
 ```
 
-each written out in full with a field definition and an assertion, mirroring the four existing cases.
 
 - [ ] **Step 2: Run and watch fail**
 
@@ -13154,17 +13222,93 @@ describe('useUndoable (SPEC-FINAL 8.2)', () => {
 `apps/client/src/features/entry/FieldInput.test.tsx` — one `describe` per type, each asserting the interaction and the accessibility floor:
 
 ```tsx
-  it('renders a number field with min, max and step and no counter buttons');
-  it('renders a rating as five star buttons when style is stars');
-  it('renders a rating as a slider when style is slider, labelled with its value');
-  it('toggles a multi-select option on and off and reports the whole array');
-  it('renders a computed field read-only, recomputed from its expression as siblings change');
-  it('renders a section as a heading with no input at all');
-  it('gives every tappable control at least 48 px in both dimensions');
-  it('sets dir="auto" on every label and on every free-text input');
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import type { FormFieldDefinition } from '@frc/shared';
+import { FieldInput } from './FieldInput';
+
+const f = (over: Partial<FormFieldDefinition>): FormFieldDefinition => ({
+  id: 'f', key: 'k', label: 'Label', help_text: null, type: 'counter', section: null,
+  display_order: 1, required: false, default_value: null, config: {}, visibility_condition: null,
+  deprecated: false, description: 'x', unit: 'count', phase: 'auto', direction: 'neutral',
+  category: null, expected_range: null, include_in_ai_context: null, is_ordinal: null, ...over,
+});
+
+describe('FieldInput across the catalogue', () => {
+  it('renders a number field with min, max and step and no counter buttons', () => {
+    render(<FieldInput field={f({ key: 'n', type: 'number', label: 'Cycles', config: { min: 0, max: 9, step: 0.5 } })} value={2} onChange={vi.fn()} />);
+    const input = screen.getByLabelText('Cycles');
+    expect(input).toHaveAttribute('type', 'number');
+    expect(input).toHaveAttribute('min', '0');
+    expect(input).toHaveAttribute('max', '9');
+    expect(input).toHaveAttribute('step', '0.5');
+    expect(screen.queryByRole('button', { name: /plus one/i })).not.toBeInTheDocument();
+  });
+
+  it('renders a rating as five star buttons when style is stars', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<FieldInput field={f({ key: 'r', type: 'rating', label: 'Driver', config: { max: 5, style: 'stars' } })} value={null} onChange={onChange} />);
+    const stars = screen.getAllByRole('radio');
+    expect(stars).toHaveLength(5);
+    await user.click(stars[3]!);
+    expect(onChange).toHaveBeenCalledWith(4);
+  });
+
+  it('renders a rating as a slider when style is slider, labelled with its value', () => {
+    render(<FieldInput field={f({ key: 'r', type: 'rating', label: 'Driver', config: { max: 5, style: 'slider' } })} value={3} onChange={vi.fn()} />);
+    const slider = screen.getByRole('slider', { name: 'Driver' });
+    expect(slider).toHaveValue('3');
+    expect(screen.getByText('3')).toBeInTheDocument();
+  });
+
+  it('toggles a multi-select option on and off and reports the whole array', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const field = f({ key: 'm', type: 'multi_select', label: 'Roles', config: { options: [{ value: 'a', label: 'Defence' }, { value: 'b', label: 'Scoring' }] } });
+    const { rerender } = render(<FieldInput field={field} value={[]} onChange={onChange} />);
+    await user.click(screen.getByRole('checkbox', { name: 'Defence' }));
+    expect(onChange).toHaveBeenLastCalledWith(['a']);
+    rerender(<FieldInput field={field} value={['a']} onChange={onChange} />);
+    await user.click(screen.getByRole('checkbox', { name: 'Defence' }));
+    expect(onChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it('renders a computed field read-only, recomputed from its expression as siblings change', () => {
+    const computed = f({
+      key: 'total', type: 'computed', label: 'Total', unit: 'points',
+      config: { result_type: 'float', expression: { kind: 'op', op: '+', left: { kind: 'field', key: 'a' }, right: { kind: 'field', key: 'b' } } },
+    });
+    const { rerender } = render(<FieldInput field={computed} value={undefined} onChange={vi.fn()} siblingValues={{ a: 2, b: 3 }} />);
+    expect(screen.getByLabelText('Total')).toHaveTextContent('5');
+    rerender(<FieldInput field={computed} value={undefined} onChange={vi.fn()} siblingValues={{ a: 2, b: 8 }} />);
+    expect(screen.getByLabelText('Total')).toHaveTextContent('10');
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  it('renders a section as a heading with no input at all', () => {
+    render(<FieldInput field={f({ key: 's', type: 'section', label: 'Autonomous', description: null, unit: null, phase: null, direction: null })} value={undefined} onChange={vi.fn()} />);
+    expect(screen.getByRole('heading', { name: 'Autonomous' })).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('gives every tappable control the tap-target class, which carries the 48 px floor', () => {
+    render(<FieldInput field={f({ key: 'c', type: 'counter', label: 'Notes' })} value={0} onChange={vi.fn()} />);
+    for (const button of screen.getAllByRole('button')) {
+      expect(button.className).toContain('tap-target');
+    }
+  });
+
+  it('sets dir="auto" on every label and on every free-text input', () => {
+    render(<FieldInput field={f({ key: 't', type: 'long_text', label: 'הערות', unit: 'text' })} value="" onChange={vi.fn()} />);
+    expect(screen.getByText('הערות')).toHaveAttribute('dir', 'auto');
+    expect(screen.getByRole('textbox')).toHaveAttribute('dir', 'auto');
+  });
+});
 ```
 
-each written in full, using `getComputedStyle` for the size assertion against the `.tap-target` class.
 
 - [ ] **Step 2: Run, implement, re-run, commit**
 
@@ -13407,18 +13551,107 @@ git add -A && git commit -m "feat: add the position picker and cycle path with a
 - [ ] **Step 1: Add the failing tests**
 
 ```tsx
-  it('orders sections Autonomous, Teleop, Endgame, Post-match by the fields phase metadata');
-  it('lets a section be closed and reopened, and is not one-way paging');
-  it('recomputes a computed field as its operands change, without the scouter typing it');
-  it('shows a conditional field when its condition becomes true and hides it again');
-  it('records no value for a field that is hidden at submit time');
-  it('keeps breakdown_seconds visible only for broke_down, and keeps all fields visible with it');
-  it('blocks submit and lists every out-of-range field, not just the first');
-  it('summarises every phase section in the confirmation, including empty ones');
-  it('returns to a fresh manual selection after a successful submit');
+  it('orders sections Autonomous, Teleop, Endgame, Post-match by the fields phase metadata', async () => {
+    const user = userEvent.setup();
+    render(<EntryPage {...props} />);
+    await user.click(await screen.findByRole('radio', { name: /played/i }));
+    const headings = (await screen.findAllByRole('group')).map((g) => g.textContent);
+    expect(headings.join('|')).toMatch(/Autonomous[\s\S]*Teleop[\s\S]*Endgame[\s\S]*Post-match/);
+  });
+
+  it('lets a section be closed and reopened, and is not one-way paging', async () => {
+    const user = userEvent.setup();
+    render(<EntryPage {...props} />);
+    await user.click(await screen.findByRole('radio', { name: /played/i }));
+    const auto = await screen.findByRole('group', { name: /autonomous/i });
+    await user.click(within(auto).getByRole('button', { name: /autonomous/i }));
+    expect(screen.queryByText('Auto notes')).not.toBeInTheDocument();
+    await user.click(within(auto).getByRole('button', { name: /autonomous/i }));
+    expect(await screen.findByText('Auto notes')).toBeInTheDocument();
+  });
+
+  it('recomputes a computed field as its operands change, without the scouter typing it', async () => {
+    const user = userEvent.setup();
+    render(<EntryPage {...props} />);
+    await user.click(await screen.findByRole('radio', { name: /played/i }));
+    await user.click(await screen.findByRole('button', { name: 'Auto notes plus one' }));
+    expect(screen.getByLabelText('Total points')).toHaveTextContent('5');
+  });
+
+  it('shows a conditional field when its condition becomes true and hides it again', async () => {
+    const user = userEvent.setup();
+    render(<EntryPage {...props} />);
+    await user.click(await screen.findByRole('radio', { name: /played/i }));
+    expect(screen.queryByText('Climb time')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: 'Climbed' }));
+    expect(await screen.findByText('Climb time')).toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: 'Climbed' }));
+    expect(screen.queryByText('Climb time')).not.toBeInTheDocument();
+  });
+
+  it('records no value for a field that is hidden at submit time', async () => {
+    const user = userEvent.setup();
+    render(<EntryPage {...props} />);
+    await user.click(await screen.findByRole('radio', { name: /played/i }));
+    await user.click(screen.getByRole('checkbox', { name: 'Climbed' }));
+    await user.type(screen.getByLabelText('Climb time'), '9');
+    await user.click(screen.getByRole('checkbox', { name: 'Climbed' }));
+    await user.click(screen.getByRole('button', { name: /review entry/i }));
+    await user.click(await screen.findByRole('button', { name: /submit entry/i }));
+    await waitFor(async () => {
+      const [op] = await pending(10);
+      expect(op!.payload.data).not.toHaveProperty('climb_time');
+    });
+  });
+
+  it('keeps breakdown_seconds visible only for broke_down, and keeps all fields visible with it', async () => {
+    const user = userEvent.setup();
+    render(<EntryPage {...props} />);
+    await user.click(await screen.findByRole('radio', { name: /broke down/i }));
+    expect(screen.getByLabelText(/breakdown time/i)).toBeInTheDocument();
+    expect(await screen.findByText('Auto notes')).toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: /played/i }));
+    expect(screen.queryByLabelText(/breakdown time/i)).not.toBeInTheDocument();
+  });
+
+  it('blocks submit and lists every out-of-range field, not just the first', async () => {
+    const user = userEvent.setup();
+    render(<EntryPage {...props} />);
+    await user.click(await screen.findByRole('radio', { name: /played/i }));
+    for (let i = 0; i < 11; i += 1) await user.click(screen.getByRole('button', { name: 'Auto notes plus one' }));
+    for (let i = 0; i < 41; i += 1) await user.click(screen.getByRole('button', { name: 'Teleop notes plus one' }));
+    await user.click(screen.getByRole('button', { name: /review entry/i }));
+    await user.click(await screen.findByRole('button', { name: /submit entry/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/Auto notes/);
+    expect(alert).toHaveTextContent(/Teleop notes/);
+    expect(await pending(10)).toHaveLength(0);
+  });
+
+  it('summarises every phase section in the confirmation, including empty ones', async () => {
+    const user = userEvent.setup();
+    render(<EntryPage {...props} />);
+    await user.click(await screen.findByRole('radio', { name: /played/i }));
+    await user.click(screen.getByRole('button', { name: /review entry/i }));
+    const dialog = await screen.findByRole('dialog');
+    for (const phase of ['Autonomous', 'Teleop', 'Endgame', 'Post-match']) {
+      expect(dialog).toHaveTextContent(phase);
+    }
+  });
+
+  it('returns to a fresh manual selection after a successful submit', async () => {
+    const onSubmitted = vi.fn();
+    const user = userEvent.setup();
+    render(<EntryPage {...props} onSubmitted={onSubmitted} />);
+    await user.click(await screen.findByRole('radio', { name: /played/i }));
+    await user.click(screen.getByRole('button', { name: /review entry/i }));
+    await user.click(await screen.findByRole('button', { name: /submit entry/i }));
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledOnce());
+  });
 ```
 
-each written in full against the real component.
+(The fixture in `beforeEach` gains a `teleop_notes` counter with `expected_range` 0–40, a `climbed` toggle, a `climb_time` number whose `visibility_condition` is `{field_key:'climbed', op:'=', value:true}`, and a `total` computed field of `auto_notes * 5`.)
+
 
 - [ ] **Step 2: Implement**
 
@@ -14405,17 +14638,127 @@ git add -A && git commit -m "feat(client): add the sync page with pending, rejec
 - [ ] **Step 1: Write the failing test**
 
 ```tsx
-  it('lists open conflicts with team, match, both authors and both client timestamps');
-  it('shows a field-by-field diff and marks only the fields that differ');
-  it('offers keep-live and restore-superseded for a divergence');
-  it('offers keep-this-one for each of the two rows of a duplicate');
-  it('lets a scouter read the queue but disables every resolve action, saying who can');
-  it('reads from the cache while offline and disables resolving, saying a connection is needed');
-  it('removes an item from the worklist once it is resolved, and shows a finished state at zero');
-  it('renders at 375 px as well as at 1280 px');
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { db } from '@/data/db';
+import { ConflictsPage } from './ConflictsPage';
+
+const divergence = {
+  id: 'c-1', kind: 'divergence', team: '2096 ROBACTIVE', match: 'Qualification 12',
+  live: { author: 'Dana Levi', client_updated_at: '2026-11-14T09:09:00.000Z', data: { auto_notes: 9, teleop_notes: 4 } },
+  superseded: { author: 'Noa Cohen', client_updated_at: '2026-11-14T09:07:00.000Z', data: { auto_notes: 4, teleop_notes: 4 } },
+  labels: { auto_notes: 'Auto notes', teleop_notes: 'Teleop notes' },
+};
+
+const duplicate = {
+  id: 'c-2', kind: 'duplicate', team: '1577 Steampunk', match: 'Qualification 3',
+  rows: [
+    { row_id: 'e-1', author: 'Dana Levi', client_updated_at: '2026-11-14T09:00:00.000Z', data: { auto_notes: 1 } },
+    { row_id: 'e-2', author: 'Noa Cohen', client_updated_at: '2026-11-14T09:05:00.000Z', data: { auto_notes: 3 } },
+  ],
+  labels: { auto_notes: 'Auto notes' },
+};
+
+const rpcFor = (resolve = vi.fn(async () => ({}))) => ({
+  call: vi.fn(async (name: string) => {
+    if (name === 'listConflicts') return { items: [divergence, duplicate], next_cursor: null };
+    if (name === 'resolveConflict') return resolve();
+    return {};
+  }),
+});
+
+beforeEach(async () => {
+  await db.delete();
+  await db.open();
+  vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+});
+
+describe('ConflictsPage (SPEC-FINAL 9.5, 9.6)', () => {
+  it('lists open conflicts with team, match, both authors and both client timestamps', async () => {
+    render(<ConflictsPage eventId="ev-1" role="lead" rpc={rpcFor()} />);
+    const item = await screen.findByRole('article', { name: /2096 ROBACTIVE/ });
+    expect(item).toHaveTextContent('Qualification 12');
+    expect(item).toHaveTextContent('Dana Levi');
+    expect(item).toHaveTextContent('Noa Cohen');
+    expect(item).toHaveTextContent('14/11/2026 09:09');
+    expect(item).toHaveTextContent('14/11/2026 09:07');
+  });
+
+  it('shows a field-by-field diff and marks only the fields that differ', async () => {
+    render(<ConflictsPage eventId="ev-1" role="lead" rpc={rpcFor()} />);
+    const item = await screen.findByRole('article', { name: /2096 ROBACTIVE/ });
+    expect(within(item).getByRole('row', { name: /Auto notes/ })).toHaveAttribute('data-differs', 'true');
+    expect(within(item).getByRole('row', { name: /Teleop notes/ })).toHaveAttribute('data-differs', 'false');
+  });
+
+  it('offers keep-live and restore-superseded for a divergence', async () => {
+    const rpc = rpcFor();
+    const user = userEvent.setup();
+    render(<ConflictsPage eventId="ev-1" role="lead" rpc={rpc} />);
+    const item = await screen.findByRole('article', { name: /2096 ROBACTIVE/ });
+    await user.click(within(item).getByRole('button', { name: /restore the other copy/i }));
+    await waitFor(() =>
+      expect(rpc.call).toHaveBeenCalledWith('resolveConflict', { conflict_id: 'c-1', resolution: { keep: 'superseded' } }),
+    );
+  });
+
+  it('offers keep-this-one for each of the two rows of a duplicate', async () => {
+    const rpc = rpcFor();
+    const user = userEvent.setup();
+    render(<ConflictsPage eventId="ev-1" role="lead" rpc={rpc} />);
+    const item = await screen.findByRole('article', { name: /1577 Steampunk/ });
+    expect(within(item).getAllByRole('button', { name: /keep this one/i })).toHaveLength(2);
+    await user.click(within(item).getAllByRole('button', { name: /keep this one/i })[1]!);
+    await waitFor(() =>
+      expect(rpc.call).toHaveBeenCalledWith('resolveConflict', { conflict_id: 'c-2', resolution: { keep_row_id: 'e-2' } }),
+    );
+  });
+
+  it('lets a scouter read the queue but disables every resolve action, saying who can', async () => {
+    render(<ConflictsPage eventId="ev-1" role="scouter" rpc={rpcFor()} />);
+    expect(await screen.findByRole('article', { name: /2096 ROBACTIVE/ })).toBeInTheDocument();
+    for (const button of screen.getAllByRole('button', { name: /keep|restore/i })) {
+      expect(button).toBeDisabled();
+    }
+    expect(screen.getByText(/a lead or an admin resolves these/i)).toBeInTheDocument();
+  });
+
+  it('reads from the cache while offline and disables resolving, saying a connection is needed', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    await db.rows.put({ entity: 'sync_conflicts', id: 'c-1', event_id: 'ev-1', resolved_at: null, kind: 'divergence' });
+    render(<ConflictsPage eventId="ev-1" role="lead" rpc={rpcFor()} />);
+    expect(await screen.findByText(/resolving needs a connection/i)).toBeInTheDocument();
+    for (const button of screen.getAllByRole('button', { name: /keep|restore/i })) {
+      expect(button).toBeDisabled();
+    }
+  });
+
+  it('removes an item from the worklist once it is resolved, and shows a finished state at zero', async () => {
+    const user = userEvent.setup();
+    let listed = [divergence];
+    const rpc = {
+      call: vi.fn(async (name: string) => {
+        if (name === 'listConflicts') return { items: listed, next_cursor: null };
+        listed = [];
+        return {};
+      }),
+    };
+    render(<ConflictsPage eventId="ev-1" role="lead" rpc={rpc} />);
+    const item = await screen.findByRole('article', { name: /2096 ROBACTIVE/ });
+    await user.click(within(item).getByRole('button', { name: /keep the current copy/i }));
+    expect(await screen.findByText(/nothing left to review/i)).toBeInTheDocument();
+  });
+
+  it('renders at 375 px as well as at 1280 px, because it cannot wait for a laptop', async () => {
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 375 });
+    render(<ConflictsPage eventId="ev-1" role="lead" rpc={rpcFor()} />);
+    expect(await screen.findByRole('article', { name: /2096 ROBACTIVE/ })).toBeInTheDocument();
+    expect(screen.queryByText(/needs a computer/i)).not.toBeInTheDocument();
+  });
+});
 ```
 
-each written in full.
 
 - [ ] **Step 2: Implement, run and commit**
 
@@ -14767,16 +15110,86 @@ git add -A && git commit -m "feat(shared): add the deflate + framed QR codec wit
 - [ ] **Step 1: Write the failing test**
 
 ```tsx
-  it('shows nothing to send when the outbox is empty, and says so plainly');
-  it('splits a backlog above 200 operations into consecutive batches with their own ids');
-  it('renders a QR code in byte mode at error-correction level M');
-  it('advances one frame every 200 ms and wraps from the last frame back to the first');
-  it('keeps every pending operation in the outbox after sending — a scan is not an ack');
-  it('shows the frame counter so the sender can see it is looping');
-  it('stops cleanly and releases the timer when the page unmounts');
+import { render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { db } from '@/data/db';
+import { enqueue } from '@/data/outbox';
+import { pending } from '@/data/outbox';
+import { QrSendPage } from './QrSendPage';
+
+const toCanvas = vi.fn(async () => undefined);
+vi.mock('qrcode', () => ({ default: { toCanvas: (...args: unknown[]) => toCanvas(...args) } }));
+
+const op = (i: number) => ({
+  op_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+  entity: 'scouting_entry' as const,
+  row_id: `00000000-0000-4000-8000-${String(1000 + i).padStart(12, '0')}`,
+  action: 'create' as const, base_version: null,
+  payload: { event_id: 'ev-1', team_id: 't-1', match_id: 'm-1', form_kind: 'match', data: { auto_notes: i } },
+  author_user_id: '00000000-0000-4000-8000-000000000006',
+  client_created_at: '2026-11-14T09:00:00.000Z', client_updated_at: '2026-11-14T09:00:00.000Z', seq: i,
+});
+
+beforeEach(async () => {
+  await db.delete();
+  await db.open();
+  toCanvas.mockClear();
+  vi.useFakeTimers();
+});
+afterEach(() => vi.useRealTimers());
+
+describe('QrSendPage (SPEC-FINAL 9.8)', () => {
+  it('says plainly when there is nothing to send', async () => {
+    render(<QrSendPage />);
+    expect(await screen.findByText(/everything on this device has already reached the cloud/i)).toBeInTheDocument();
+    expect(toCanvas).not.toHaveBeenCalled();
+  });
+
+  it('splits a backlog above 200 operations into consecutive batches with their own ids', async () => {
+    for (let i = 0; i < 205; i += 1) await enqueue(op(i));
+    render(<QrSendPage />);
+    expect(await screen.findByText(/batch 1 of 2/i)).toBeInTheDocument();
+  });
+
+  it('renders a QR code in byte mode at error-correction level M', async () => {
+    await enqueue(op(1));
+    render(<QrSendPage />);
+    await waitFor(() => expect(toCanvas).toHaveBeenCalled());
+    const [, segments, options] = toCanvas.mock.calls[0]!;
+    expect((segments as { mode: string }[])[0]!.mode).toBe('byte');
+    expect(options).toMatchObject({ errorCorrectionLevel: 'M', version: 40 });
+  });
+
+  it('advances one frame every 200 ms and wraps from the last frame back to the first', async () => {
+    for (let i = 0; i < 60; i += 1) await enqueue(op(i));
+    render(<QrSendPage />);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/frame 1 of \d+/i));
+    const total = Number(screen.getByRole('status').textContent!.match(/of (\d+)/)![1]);
+    vi.advanceTimersByTime(200 * (total - 1));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(`frame ${total} of ${total}`));
+    vi.advanceTimersByTime(200);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(`frame 1 of ${total}`));
+  });
+
+  it('keeps every pending operation in the outbox after sending — a scan is not an ack', async () => {
+    await enqueue(op(1));
+    render(<QrSendPage />);
+    vi.advanceTimersByTime(5000);
+    expect(await pending(10)).toHaveLength(1);
+  });
+
+  it('stops cleanly and releases the timer when the page unmounts', async () => {
+    await enqueue(op(1));
+    const { unmount } = render(<QrSendPage />);
+    await waitFor(() => expect(toCanvas).toHaveBeenCalled());
+    const before = toCanvas.mock.calls.length;
+    unmount();
+    vi.advanceTimersByTime(2000);
+    expect(toCanvas.mock.calls.length).toBe(before);
+  });
+});
 ```
 
-each written in full with fake timers.
 
 - [ ] **Step 2: Implement, run and commit**
 
@@ -15011,21 +15424,104 @@ git add -A && git commit -m "feat(client): add the lead-approved device wipe, re
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-  it('searchTeams matches by number and by name, across the whole season');
-  it('searchTeams marks teams in the active event with their rank and leaves others unranked');
-  it('searchTeams is bounded and paginated, and never returns the whole registry at once');
-  it('listTeamEvents returns only events where we hold entries for that team');
-  it('queryEntries returns entries of one event only, never another');
-  it('queryEntries filters by form kind, and returns both kinds when unfiltered');
-  it('queryEntries matches a scouter name, a team name, a team number and a match number');
-  it('queryEntries never returns a soft-deleted entry');
-  it('queryEntries carries each row scouted points, computed by the shared engine');
-  it('getEntry returns every field value by phase, the score, and the scouter full name');
-  it('getEntry returns not-found for a soft-deleted entry');
-  it('a service caller may call all four');
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { Caller } from '@frc/shared';
+import { getEntry, listTeamEvents, queryEntries, searchTeams } from './search';
+import { makeFakeContext, type FakeContext } from '../../test/fake-context';
+
+const scouter: Caller = { kind: 'user', userId: 'u-s', role: 'scouter' };
+const service: Caller = { kind: 'service', label: 'mcp' };
+
+let ctx: FakeContext;
+beforeEach(() => {
+  ctx = makeFakeContext();
+  ctx.seedSmallSeason(); // se-1, ev-1 (active) and ev-2, teams t-1..t-3, entries e-1..e-12
+});
+
+describe('searchTeams (SPEC-FINAL 13.2)', () => {
+  it('matches by number and by name, across the whole season', async () => {
+    expect((await searchTeams(scouter, { query: '2096' }, ctx)).items.map((t) => t.id)).toContain('t-1');
+    expect((await searchTeams(scouter, { query: 'robactive' }, ctx)).items.map((t) => t.id)).toContain('t-1');
+  });
+
+  it('marks teams in the active event with their rank and leaves others unranked', async () => {
+    const items = (await searchTeams(scouter, { query: '' }, ctx)).items;
+    expect(items.find((t) => t.id === 't-1')!.rank).toBe(1);
+    expect(items.find((t) => t.id === 't-3')!.rank).toBeNull();
+  });
+
+  it('is bounded and paginated, and never returns the whole registry at once', async () => {
+    const page = await searchTeams(scouter, { query: '', limit: 2 }, ctx);
+    expect(page.items).toHaveLength(2);
+    expect(page.next_cursor).not.toBeNull();
+  });
+});
+
+describe('listTeamEvents', () => {
+  it('returns only events where we hold entries for that team', async () => {
+    const events = await listTeamEvents(scouter, { team_id: 't-1' }, ctx);
+    expect(events.items.map((e) => e.id)).toEqual(['ev-1']);
+  });
+});
+
+describe('queryEntries (SPEC-FINAL 13.3)', () => {
+  it('returns entries of one event only, never another', async () => {
+    const result = await queryEntries(scouter, { event_id: 'ev-1' }, ctx);
+    expect(result.items.every((e) => e.event_id === 'ev-1')).toBe(true);
+  });
+
+  it('filters by form kind, and returns both kinds when unfiltered', async () => {
+    const matchOnly = await queryEntries(scouter, { event_id: 'ev-1', form_kind: 'match' }, ctx);
+    expect(matchOnly.items.every((e) => e.form_kind === 'match')).toBe(true);
+    const both = await queryEntries(scouter, { event_id: 'ev-1' }, ctx);
+    expect(new Set(both.items.map((e) => e.form_kind)).size).toBe(2);
+  });
+
+  it('matches a scouter name, a team name, a team number and a match number', async () => {
+    for (const query of ['Seed Scouter', 'ROBACTIVE', '2096', '3']) {
+      expect((await queryEntries(scouter, { event_id: 'ev-1', query }, ctx)).items.length, query).toBeGreaterThan(0);
+    }
+  });
+
+  it('never returns a soft-deleted entry', async () => {
+    ctx.softDelete('e-1');
+    const result = await queryEntries(scouter, { event_id: 'ev-1' }, ctx);
+    expect(result.items.map((e) => e.id)).not.toContain('e-1');
+  });
+
+  it('carries each row scouted points, computed by the shared engine', async () => {
+    const result = await queryEntries(scouter, { event_id: 'ev-1' }, ctx);
+    const played = result.items.find((e) => e.robot_status === 'played')!;
+    expect(typeof played.scouted_points).toBe('number');
+    const noShow = result.items.find((e) => e.robot_status === 'no_show');
+    if (noShow) expect(noShow.scouted_points).toBeNull();
+  });
+});
+
+describe('getEntry (SPEC-FINAL 13.4, 18.5)', () => {
+  it('returns every field value by phase, the score, and the scouter full name', async () => {
+    const entry = await getEntry(scouter, { entry_id: 'e-1' }, ctx);
+    expect(entry.scouter_name).toBe('Seed Scouter');
+    expect(entry.phases.map((p) => p.phase)).toEqual(['auto', 'teleop', 'endgame', 'post_match']);
+    expect(typeof entry.scouted_points).toBe('number');
+  });
+
+  it('returns not-found for a soft-deleted entry', async () => {
+    ctx.softDelete('e-1');
+    await expect(getEntry(scouter, { entry_id: 'e-1' }, ctx)).rejects.toMatchObject({ code: 'not-found' });
+  });
+});
+
+describe('the service caller', () => {
+  it('may call all four, because they are queries', async () => {
+    await expect(searchTeams(service, { query: '' }, ctx)).resolves.toBeTruthy();
+    await expect(listTeamEvents(service, { team_id: 't-1' }, ctx)).resolves.toBeTruthy();
+    await expect(queryEntries(service, { event_id: 'ev-1' }, ctx)).resolves.toBeTruthy();
+    await expect(getEntry(service, { entry_id: 'e-1' }, ctx)).resolves.toBeTruthy();
+  });
+});
 ```
 
-each written in full against the fake context.
 
 - [ ] **Step 2: Implement, run, commit**
 
@@ -15057,14 +15553,106 @@ git add -A && git commit -m "feat(server): add team search, entry search and ent
 - [ ] **Step 1: Write the failing test**
 
 ```tsx
-  it('filters as you type, by number and by name');
-  it('shows a rank badge only for teams in the active event');
-  it('shows a medal on the top three and on nobody else');
-  it('opens the team page directly for a team in the active event');
-  it('offers the events a team competed at for a team outside the active event');
-  it('asks are you sure before switching, and does nothing if the answer is no');
-  it('sets a session-only override on yes and lands on the team page');
-  it('disables the cross-event path entirely while offline, and says why');
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { sessionOverride } from '@/features/context/sessionOverride';
+import { TeamSearchPage } from './TeamSearchPage';
+
+const teams = [
+  { id: 't-1', number: 2096, name: 'ROBACTIVE', rank: 1, in_active_event: true },
+  { id: 't-2', number: 1577, name: 'Steampunk', rank: 3, in_active_event: true },
+  { id: 't-3', number: 5987, name: 'Galaxia', rank: 9, in_active_event: true },
+  { id: 't-4', number: 3339, name: 'BumbleB', rank: null, in_active_event: false },
+];
+
+const rpcFor = () => ({
+  call: vi.fn(async (name: string) => {
+    if (name === 'searchTeams') return { items: teams, next_cursor: null };
+    if (name === 'listTeamEvents') return { items: [{ id: 'ev-2', name: 'Week 3' }], next_cursor: null };
+    return {};
+  }),
+});
+
+const navigate = vi.fn();
+vi.mock('react-router-dom', async () => ({
+  ...(await vi.importActual<object>('react-router-dom')),
+  useNavigate: () => navigate,
+}));
+
+beforeEach(() => {
+  navigate.mockClear();
+  sessionOverride.clear();
+  vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+});
+
+describe('TeamSearchPage (SPEC-FINAL 13.2)', () => {
+  it('filters as you type, by number and by name', async () => {
+    const user = userEvent.setup();
+    render(<TeamSearchPage rpc={rpcFor()} />);
+    await user.type(await screen.findByLabelText(/search teams/i), '1577');
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(1));
+    await user.clear(screen.getByLabelText(/search teams/i));
+    await user.type(screen.getByLabelText(/search teams/i), 'galax');
+    await waitFor(() => expect(screen.getByText('Galaxia')).toBeInTheDocument());
+  });
+
+  it('shows a rank badge only for teams in the active event', async () => {
+    render(<TeamSearchPage rpc={rpcFor()} />);
+    const inEvent = await screen.findByRole('listitem', { name: /2096/ });
+    expect(within(inEvent).getByLabelText(/rank 1/i)).toBeInTheDocument();
+    const outside = screen.getByRole('listitem', { name: /3339/ });
+    expect(within(outside).queryByLabelText(/rank/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a medal on the top three and on nobody else', async () => {
+    render(<TeamSearchPage rpc={rpcFor()} />);
+    expect(await screen.findAllByLabelText(/medal/i)).toHaveLength(2); // ranks 1 and 3 are present, 9 is not
+    expect(within(screen.getByRole('listitem', { name: /5987/ })).queryByLabelText(/medal/i)).not.toBeInTheDocument();
+  });
+
+  it('opens the team page directly for a team in the active event', async () => {
+    const user = userEvent.setup();
+    render(<TeamSearchPage rpc={rpcFor()} />);
+    await user.click(await screen.findByRole('button', { name: /open 2096/i }));
+    expect(navigate).toHaveBeenCalledWith('/teams/t-1');
+  });
+
+  it('offers the events a team competed at for a team outside the active event', async () => {
+    const user = userEvent.setup();
+    render(<TeamSearchPage rpc={rpcFor()} />);
+    await user.click(await screen.findByRole('button', { name: /3339 competed elsewhere/i }));
+    expect(await screen.findByRole('button', { name: 'Week 3' })).toBeInTheDocument();
+  });
+
+  it('asks are you sure before switching, and does nothing if the answer is no', async () => {
+    const user = userEvent.setup();
+    render(<TeamSearchPage rpc={rpcFor()} />);
+    await user.click(await screen.findByRole('button', { name: /3339 competed elsewhere/i }));
+    await user.click(await screen.findByRole('button', { name: 'Week 3' }));
+    expect(await screen.findByRole('dialog', { name: /are you sure/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /cancel/i }));
+    expect(sessionOverride.get()).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('sets a session-only override on yes and lands on the team page', async () => {
+    const user = userEvent.setup();
+    render(<TeamSearchPage rpc={rpcFor()} />);
+    await user.click(await screen.findByRole('button', { name: /3339 competed elsewhere/i }));
+    await user.click(await screen.findByRole('button', { name: 'Week 3' }));
+    await user.click(await screen.findByRole('button', { name: /switch for this session/i }));
+    expect(sessionOverride.get()).toBe('ev-2');
+    expect(navigate).toHaveBeenCalledWith('/teams/t-4');
+  });
+
+  it('disables the cross-event path entirely while offline, and says why', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    render(<TeamSearchPage rpc={rpcFor()} />);
+    expect(await screen.findByRole('button', { name: /3339 competed elsewhere/i })).toBeDisabled();
+    expect(screen.getByText(/only the default competition is available offline/i)).toBeInTheDocument();
+  });
+});
 ```
 
 - [ ] **Step 2: Implement, run, commit**
@@ -15096,14 +15684,99 @@ git add -A && git commit -m "feat(client): add the season-wide team search with 
 - [ ] **Step 1: Write the failing tests, implement, run, commit**
 
 ```tsx
-  it('lists entries of the active event, densest rows first, with scouted points on each');
-  it('filters by kind with a chip, and shows both kinds when no chip is active');
-  it('filters as you type by team name, team number, match number and scouter name');
-  it('opens the preview as a full page and not a drawer');
-  it('lays field values out by phase, with the section headings in order');
-  it('shows the status and no field rows at all for a no-show, never zeros');
-  it('renders Hebrew note values with dir=auto so they read right to left');
-  it('formats the timestamp as DD/MM/YYYY and 24-hour local time');
+// EntrySearchPage.test.tsx
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import { EntrySearchPage } from './EntrySearchPage';
+
+const items = [
+  { id: 'e-1', form_kind: 'match', match_number: 12, team_number: 2096, team_name: 'ROBACTIVE', scouter_name: 'Seed Scouter', robot_status: 'played', scouted_points: 25 },
+  { id: 'e-2', form_kind: 'super', match_number: null, team_number: 1577, team_name: 'Steampunk', scouter_name: 'Dana Levi', robot_status: null, scouted_points: null },
+];
+
+const rpcFor = () => ({ call: vi.fn(async () => ({ items, next_cursor: null })) });
+const navigate = vi.fn();
+vi.mock('react-router-dom', async () => ({
+  ...(await vi.importActual<object>('react-router-dom')),
+  useNavigate: () => navigate,
+}));
+
+describe('EntrySearchPage (SPEC-FINAL 13.3)', () => {
+  it('lists entries of the active event with scouted points on each', async () => {
+    render(<EntrySearchPage eventId="ev-1" rpc={rpcFor()} />);
+    const row = await screen.findByRole('row', { name: /2096/ });
+    expect(row).toHaveTextContent('25.00');
+  });
+
+  it('filters by kind with a chip, and shows both kinds when no chip is active', async () => {
+    const rpc = rpcFor();
+    const user = userEvent.setup();
+    render(<EntrySearchPage eventId="ev-1" rpc={rpc} />);
+    expect(await screen.findAllByRole('row')).toHaveLength(3); // header + two
+    await user.click(screen.getByRole('button', { name: /^match$/i }));
+    await waitFor(() =>
+      expect(rpc.call).toHaveBeenLastCalledWith('queryEntries', expect.objectContaining({ form_kind: 'match' })),
+    );
+  });
+
+  it('filters as you type by team name, team number, match number and scouter name', async () => {
+    const rpc = rpcFor();
+    const user = userEvent.setup();
+    render(<EntrySearchPage eventId="ev-1" rpc={rpc} />);
+    await user.type(await screen.findByLabelText(/search entries/i), 'Dana');
+    await waitFor(() =>
+      expect(rpc.call).toHaveBeenLastCalledWith('queryEntries', expect.objectContaining({ query: 'Dana' })),
+    );
+  });
+
+  it('opens the preview as a full page and not a drawer', async () => {
+    const user = userEvent.setup();
+    render(<EntrySearchPage eventId="ev-1" rpc={rpcFor()} />);
+    await user.click(await screen.findByRole('row', { name: /2096/ }));
+    expect(navigate).toHaveBeenCalledWith('/entries/e-1');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+// EntryPreviewPage.test.tsx
+const entry = {
+  id: 'e-1', team: '2096 ROBACTIVE', match: 'Qualification 12', alliance: 'red',
+  robot_status: 'played', form_kind: 'match', scouter_name: 'Seed Scouter',
+  scouted_points: 25, client_updated_at: '2026-11-14T09:31:02.000Z',
+  phases: [
+    { phase: 'auto', fields: [{ key: 'auto_notes', label: 'Auto notes', value: 3 }] },
+    { phase: 'teleop', fields: [] },
+    { phase: 'endgame', fields: [] },
+    { phase: 'post_match', fields: [{ key: 'notes', label: 'הערות', value: 'הרובוט היה איטי' }] },
+  ],
+};
+
+describe('EntryPreviewPage (SPEC-FINAL 13.4)', () => {
+  it('lays field values out by phase, with the section headings in order', async () => {
+    render(<EntryPreviewPage rpc={{ call: async () => entry }} entryId="e-1" />);
+    const headings = (await screen.findAllByRole('heading', { level: 2 })).map((h) => h.textContent);
+    expect(headings).toEqual(['Autonomous', 'Teleop', 'Endgame', 'Post-match']);
+  });
+
+  it('shows the status and no field rows at all for a no-show, never zeros', async () => {
+    const noShow = { ...entry, robot_status: 'no_show', scouted_points: null, phases: [] };
+    render(<EntryPreviewPage rpc={{ call: async () => noShow }} entryId="e-1" />);
+    expect(await screen.findByText(/no show/i)).toBeInTheDocument();
+    expect(screen.queryByRole('definition')).not.toBeInTheDocument();
+    expect(screen.getByText('—')).toBeInTheDocument();
+  });
+
+  it('renders Hebrew note values with dir=auto so they read right to left', async () => {
+    render(<EntryPreviewPage rpc={{ call: async () => entry }} entryId="e-1" />);
+    expect(await screen.findByText('הרובוט היה איטי')).toHaveAttribute('dir', 'auto');
+  });
+
+  it('formats the timestamp as DD/MM/YYYY and 24-hour local time', async () => {
+    render(<EntryPreviewPage rpc={{ call: async () => entry }} entryId="e-1" />);
+    expect(await screen.findByText(/14\/11\/2026/)).toBeInTheDocument();
+  });
+});
 ```
 
 ```bash
@@ -15134,15 +15807,103 @@ git add -A && git commit -m "feat(client): add entry search and the full-page en
 - [ ] **Step 1: Write the failing test**
 
 ```tsx
-  it('shows a sticky header with the team number, name, headline metric and rank badge');
-  it('lists every metric as label, value and an inline bar');
-  it('shows a match-by-match row per match the team has an entry for');
-  it('opens that entry preview when a match row is clicked');
-  it('lists long-text notes newest first, each with its match, field label and scouter');
-  it('renders Hebrew notes with dir=auto');
-  it('shows breakdowns, no-shows, disabled and the availability rate');
-  it('renders no photo and no image placeholder anywhere');
-  it('shows the empty state when the team has no entries at this event');
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import { TeamPage } from './TeamPage';
+
+const stats = {
+  team: { id: 't-1', number: 2096, name: 'ROBACTIVE', rank: 1 },
+  headline: { label: 'Average points', value: 15.5 },
+  metrics: [
+    { key: 'avg_points', label: 'Average points', value: 15.5, domain: { min: 0, max: 30 }, direction: 'higher_is_better' },
+    { key: 'auto_notes', label: 'Auto notes', value: 2.25, domain: { min: 0, max: 10 }, direction: 'higher_is_better' },
+  ],
+  matches: [
+    { entry_id: 'e-1', match_number: 1, robot_status: 'played', scouted_points: 10, columns: { auto_notes: 2 } },
+    { entry_id: 'e-2', match_number: 2, robot_status: 'no_show', scouted_points: null, columns: {} },
+  ],
+  notes: [
+    { field_label: 'הערות', value: 'הרובוט היה איטי', match_number: 2, scouter_name: 'Dana Levi', client_updated_at: '2026-11-14T10:00:00.000Z' },
+    { field_label: 'הערות', value: 'good climb', match_number: 1, scouter_name: 'Seed Scouter', client_updated_at: '2026-11-14T09:00:00.000Z' },
+  ],
+  reliability: { breakdowns: 0, no_shows: 1, disabled: 0, availability_rate: 0.5 },
+};
+
+const navigate = vi.fn();
+vi.mock('react-router-dom', async () => ({
+  ...(await vi.importActual<object>('react-router-dom')),
+  useNavigate: () => navigate,
+}));
+
+const rpcFor = (payload = stats) => ({ call: vi.fn(async () => payload) });
+
+describe('TeamPage (SPEC-FINAL 13.1)', () => {
+  it('shows a sticky header with the team number, name, headline metric and rank badge', async () => {
+    render(<TeamPage teamId="t-1" rpc={rpcFor()} />);
+    const header = await screen.findByRole('banner');
+    expect(header).toHaveTextContent('2096');
+    expect(header).toHaveTextContent('ROBACTIVE');
+    expect(header).toHaveTextContent('15.50');
+    expect(within(header).getByLabelText(/rank 1/i)).toBeInTheDocument();
+    expect(getComputedStyle(header).position).toBe('sticky');
+  });
+
+  it('lists every metric as label, value and an inline bar', async () => {
+    render(<TeamPage teamId="t-1" rpc={rpcFor()} />);
+    const row = await screen.findByRole('row', { name: /Auto notes/ });
+    expect(row).toHaveTextContent('2.25');
+    expect(within(row).getByRole('meter')).toBeInTheDocument();
+  });
+
+  it('shows a match-by-match row per match the team has an entry for', async () => {
+    render(<TeamPage teamId="t-1" rpc={rpcFor()} />);
+    const table = await screen.findByRole('table', { name: /match by match/i });
+    expect(within(table).getAllByRole('row')).toHaveLength(3); // header + two
+    expect(within(table).getByRole('row', { name: /no show/i })).toHaveTextContent('—');
+  });
+
+  it('opens that entry preview when a match row is clicked', async () => {
+    const user = userEvent.setup();
+    render(<TeamPage teamId="t-1" rpc={rpcFor()} />);
+    const table = await screen.findByRole('table', { name: /match by match/i });
+    await user.click(within(table).getAllByRole('row')[1]!);
+    expect(navigate).toHaveBeenCalledWith('/entries/e-1');
+  });
+
+  it('lists long-text notes newest first, each with its match, field label and scouter', async () => {
+    render(<TeamPage teamId="t-1" rpc={rpcFor()} />);
+    const notes = await screen.findAllByRole('listitem', { name: /note/i });
+    expect(notes[0]).toHaveTextContent('הרובוט היה איטי');
+    expect(notes[0]).toHaveTextContent('Dana Levi');
+    expect(notes[0]).toHaveTextContent('2');
+  });
+
+  it('renders Hebrew notes with dir=auto', async () => {
+    render(<TeamPage teamId="t-1" rpc={rpcFor()} />);
+    expect(await screen.findByText('הרובוט היה איטי')).toHaveAttribute('dir', 'auto');
+  });
+
+  it('shows breakdowns, no-shows, disabled and the availability rate', async () => {
+    render(<TeamPage teamId="t-1" rpc={rpcFor()} />);
+    const panel = await screen.findByRole('group', { name: /reliability/i });
+    expect(panel).toHaveTextContent('0');
+    expect(panel).toHaveTextContent('1');
+    expect(panel).toHaveTextContent('50%');
+  });
+
+  it('renders no photo and no image placeholder anywhere', async () => {
+    render(<TeamPage teamId="t-1" rpc={rpcFor()} />);
+    await screen.findByRole('banner');
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  });
+
+  it('shows the empty state when the team has no entries at this event', async () => {
+    const empty = { ...stats, metrics: [], matches: [], notes: [], reliability: { breakdowns: 0, no_shows: 0, disabled: 0, availability_rate: null } };
+    render(<TeamPage teamId="t-1" rpc={rpcFor(empty)} />);
+    expect(await screen.findByText(/no entries for this team yet/i)).toBeInTheDocument();
+  });
+});
 ```
 
 - [ ] **Step 2: Implement, run, commit**
@@ -15784,22 +16545,108 @@ git add -A && git commit -m "feat(shared): add cycle derivation, reliability cou
 `apps/server/src/core/queries/stats.test.ts`:
 
 ```ts
-  it('ranks by the status-aware average points per match, descending, by default');
-  it('excludes a no-show from the mean rather than averaging in a zero');
-  it('includes a broke_down entry, because its partial data is real observed performance');
-  it('excludes practice and playoff matches from every figure');
-  it('counts a duplicated (team, match) once, using the latest client_updated_at');
-  it('returns the four reliability figures and the availability rate per team');
-  it('returns null, not zero, for a team with no qualification entries');
-  it('sorts by any column on request, and never by standard deviation');
-  it('returns no weighting inputs at all in phase 1');
-  it('getTeamStats returns the match-by-match series in match-number order');
-  it('getTeamStats returns the long-text notes newest first with match, field label and scouter');
-  it('getTeamStats refuses a metric whose field type changed between versions, with that message');
-  it('is bounded and paginated, and a service caller may call it');
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { Caller } from '@frc/shared';
+import { getTeamStats, rankTeams } from './stats';
+import { makeFakeContext, type FakeContext } from '../../test/fake-context';
+
+const lead: Caller = { kind: 'user', userId: 'u-l', role: 'lead' };
+const service: Caller = { kind: 'service', label: 'mcp' };
+
+let ctx: FakeContext;
+beforeEach(() => {
+  ctx = makeFakeContext();
+  // t-1: three qualification entries scoring 10, 20 and a no-show.
+  // t-2: two qualification entries scoring 12 and 12, one of them broke_down.
+  // t-3: one practice entry only.
+  ctx.seedRankingFixture();
+});
+
+describe('rankTeams — the fixed phase 1 table (SPEC-FINAL 13.5, 11.5)', () => {
+  it('ranks by the status-aware average points per match, descending, by default', async () => {
+    const table = await rankTeams(lead, { event_id: 'ev-1' }, ctx);
+    expect(table.rows.map((r) => r.team_id)).toEqual(['t-1', 't-2', 't-3']);
+    expect(table.rows[0]!.average_points).toBeCloseTo(15, 6);
+  });
+
+  it('excludes a no-show from the mean rather than averaging in a zero', async () => {
+    const table = await rankTeams(lead, { event_id: 'ev-1' }, ctx);
+    expect(table.rows.find((r) => r.team_id === 't-1')!.average_points).toBeCloseTo(15, 6);
+  });
+
+  it('includes a broke_down entry, because its partial data is real observed performance', async () => {
+    const table = await rankTeams(lead, { event_id: 'ev-1' }, ctx);
+    expect(table.rows.find((r) => r.team_id === 't-2')!.average_points).toBeCloseTo(12, 6);
+  });
+
+  it('excludes practice and playoff matches from every figure', async () => {
+    const table = await rankTeams(lead, { event_id: 'ev-1' }, ctx);
+    expect(table.rows.find((r) => r.team_id === 't-3')!.average_points).toBeNull();
+  });
+
+  it('counts a duplicated (team, match) once, using the latest client_updated_at', async () => {
+    ctx.duplicateEntry('t-1-match-1', { scoreDelta: 100, newer: true });
+    const table = await rankTeams(lead, { event_id: 'ev-1' }, ctx);
+    expect(table.rows.find((r) => r.team_id === 't-1')!.matches_counted).toBe(2);
+  });
+
+  it('returns the four reliability figures and the availability rate per team', async () => {
+    const row = (await rankTeams(lead, { event_id: 'ev-1' }, ctx)).rows.find((r) => r.team_id === 't-1')!;
+    expect(row).toMatchObject({ breakdowns: 0, no_shows: 1, disabled: 0 });
+    expect(row.availability_rate).toBeCloseTo(2 / 3, 6);
+  });
+
+  it('returns null, not zero, for a team with no qualification entries', async () => {
+    const row = (await rankTeams(lead, { event_id: 'ev-1' }, ctx)).rows.find((r) => r.team_id === 't-3')!;
+    expect(row.average_points).toBeNull();
+    expect(row.availability_rate).toBeNull();
+  });
+
+  it('sorts by any column on request, and never by standard deviation', async () => {
+    const byReliability = await rankTeams(lead, { event_id: 'ev-1', sort_by: 'availability_rate' }, ctx);
+    expect(byReliability.rows[0]!.availability_rate).toBeGreaterThanOrEqual(
+      byReliability.rows[1]!.availability_rate ?? 0,
+    );
+    await expect(rankTeams(lead, { event_id: 'ev-1', sort_by: 'stddev' } as never, ctx))
+      .rejects.toMatchObject({ code: 'invalid' });
+  });
+
+  it('returns no weighting inputs at all in phase 1', async () => {
+    const table = await rankTeams(lead, { event_id: 'ev-1' }, ctx);
+    expect(table).not.toHaveProperty('weights');
+    expect(table).not.toHaveProperty('contributions');
+  });
+});
+
+describe('getTeamStats (SPEC-FINAL 13.1)', () => {
+  it('returns the match-by-match series in match-number order', async () => {
+    const stats = await getTeamStats(lead, { team_id: 't-1', scope: { mode: 'event', event_id: 'ev-1' } }, ctx);
+    expect(stats.matches.map((m) => m.match_number)).toEqual([1, 2, 3]);
+  });
+
+  it('returns the long-text notes newest first with match, field label and scouter', async () => {
+    const stats = await getTeamStats(lead, { team_id: 't-1', scope: { mode: 'event', event_id: 'ev-1' } }, ctx);
+    expect(stats.notes[0]).toMatchObject({ field_label: 'Notes', scouter_name: 'Seed Scouter' });
+    expect(stats.notes[0]!.client_updated_at >= stats.notes[1]!.client_updated_at).toBe(true);
+  });
+
+  it('refuses a metric whose field type changed between versions, with that message', async () => {
+    ctx.changeFieldTypeBetweenVersions('auto_notes');
+    const stats = await getTeamStats(lead, { team_id: 't-1', scope: { mode: 'event', event_id: 'ev-1' } }, ctx);
+    const broken = stats.metrics.find((m) => m.field_key === 'auto_notes')!;
+    expect(broken.value).toBeNull();
+    expect(broken.unavailable_reason).toBe('type-changed');
+  });
+
+  it('is bounded and paginated, and a service caller may call it', async () => {
+    await expect(getTeamStats(service, { team_id: 't-1', scope: { mode: 'event', event_id: 'ev-1' } }, ctx))
+      .resolves.toBeTruthy();
+    const stats = await getTeamStats(lead, { team_id: 't-1', scope: { mode: 'event', event_id: 'ev-1' }, limit: 2 }, ctx);
+    expect(stats.matches.length).toBeLessThanOrEqual(2);
+  });
+});
 ```
 
-each written in full against a fake context seeded with a small event.
 
 - [ ] **Step 2: Implement, run, commit**
 
@@ -15831,15 +16678,92 @@ git add -A && git commit -m "feat(server): add getTeamStats and the fixed phase 
 - [ ] **Step 1: Write the failing test**
 
 ```tsx
-  it('lists every team in the event with rank, average points and the reliability figures');
-  it('puts a medal on the top three and on nobody else');
-  it('sorts by a column when its header is clicked, and reverses on a second click');
-  it('offers no sort at all on the standard-deviation column');
-  it('renders numbers right-aligned and tabular, and dates never');
-  it('shows an em dash for a team with no qualification entries, never a zero');
-  it('renders every row without pagination for fifty teams');
-  it('computes from the local cache while offline and says the figures are from this device');
-  it('shows no weighting controls, because they arrive in phase 2');
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { RankingPage } from './RankingPage';
+
+const rows = Array.from({ length: 50 }, (_, i) => ({
+  team_id: `t-${i}`, team_number: 1000 + i, team_name: `Team ${1000 + i}`,
+  average_points: i === 49 ? null : 50 - i,
+  stddev: 2 + (i % 3),
+  breakdowns: i % 4, no_shows: i % 5, disabled: 0,
+  availability_rate: i === 49 ? null : 1 - (i % 5) / 10,
+  matches_counted: i === 49 ? 0 : 10,
+}));
+
+const rpcFor = () => ({ call: vi.fn(async () => ({ rows })) });
+
+beforeEach(() => {
+  vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+});
+
+describe('RankingPage — the fixed phase 1 table (SPEC-FINAL 13.5)', () => {
+  it('lists every team with rank, average points and the reliability figures', async () => {
+    render(<RankingPage eventId="ev-1" rpc={rpcFor()} />);
+    const first = await screen.findByRole('row', { name: /Team 1000/ });
+    expect(first).toHaveTextContent('50.00');
+    expect(within(first).getByLabelText(/breakdowns/i)).toBeInTheDocument();
+    expect(within(first).getByLabelText(/availability/i)).toHaveTextContent('100%');
+  });
+
+  it('puts a medal on the top three and on nobody else', async () => {
+    render(<RankingPage eventId="ev-1" rpc={rpcFor()} />);
+    expect(await screen.findAllByLabelText(/medal/i)).toHaveLength(3);
+  });
+
+  it('sorts by a column when its header is clicked, and reverses on a second click', async () => {
+    const user = userEvent.setup();
+    render(<RankingPage eventId="ev-1" rpc={rpcFor()} />);
+    const header = await screen.findByRole('columnheader', { name: /average points/i });
+    await user.click(header);
+    expect(header).toHaveAttribute('aria-sort', 'ascending');
+    await user.click(header);
+    expect(header).toHaveAttribute('aria-sort', 'descending');
+  });
+
+  it('offers no sort at all on the standard-deviation column', async () => {
+    const user = userEvent.setup();
+    render(<RankingPage eventId="ev-1" rpc={rpcFor()} />);
+    const header = await screen.findByRole('columnheader', { name: /consistency/i });
+    expect(header).not.toHaveAttribute('aria-sort');
+    await user.click(header);
+    expect(header).not.toHaveAttribute('aria-sort');
+  });
+
+  it('renders numbers right-aligned and tabular', async () => {
+    render(<RankingPage eventId="ev-1" rpc={rpcFor()} />);
+    const cell = within(await screen.findByRole('row', { name: /Team 1000/ })).getByText('50.00');
+    expect(cell.className).toContain('tabular-nums');
+    expect(cell.className).toContain('text-right');
+  });
+
+  it('shows an em dash for a team with no qualification entries, never a zero', async () => {
+    render(<RankingPage eventId="ev-1" rpc={rpcFor()} />);
+    const last = await screen.findByRole('row', { name: /Team 1049/ });
+    expect(last).toHaveTextContent('—');
+    expect(last).not.toHaveTextContent('0.00');
+  });
+
+  it('renders every row without pagination for fifty teams', async () => {
+    render(<RankingPage eventId="ev-1" rpc={rpcFor()} />);
+    expect(await screen.findAllByRole('row')).toHaveLength(51);
+    expect(screen.queryByRole('navigation', { name: /pagination/i })).not.toBeInTheDocument();
+  });
+
+  it('computes from the local cache while offline and says the figures are from this device', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    render(<RankingPage eventId="ev-1" rpc={{ call: async () => { throw new Error('offline'); } }} />);
+    expect(await screen.findByText(/computed from the data on this device/i)).toBeInTheDocument();
+  });
+
+  it('shows no weighting controls, because they arrive in phase 2', async () => {
+    render(<RankingPage eventId="ev-1" rpc={rpcFor()} />);
+    await screen.findByRole('table');
+    expect(screen.queryByRole('button', { name: /weight/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument();
+  });
+});
 ```
 
 - [ ] **Step 2: Implement, run, commit**
@@ -15872,18 +16796,70 @@ git add -A && git commit -m "feat(client): add the fixed phase 1 ranking table"
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-  it('maps the worst value to red and the best to green for higher_is_better');
-  it('inverts the scale for lower_is_better, so green is low');
-  it('returns no scale at all for neutral');
-  it('uses a declared expected_range as the domain, not the observed values');
-  it('uses the observed min and max when the metric is unbounded');
-  it('fixes the domain at 0 to 1 for a rate, because absolute level matters');
-  it('uses option rank for an ordinal enum, top of the list being the lowest rank');
-  it('returns null for a missing value and excludes it from the domain');
-  it('falls back to a flat mid colour when min equals max');
-  it('varies lightness monotonically across the ramp, so it survives colour blindness');
-  it('never emits brand yellow, which is reserved and never appears in data ink');
+import { describe, expect, it } from 'vitest';
+import { shadeFor } from './shading';
+
+const domain = { kind: 'range' as const, min: 0, max: 10 };
+
+describe('value shading (SPEC-FINAL 12.6)', () => {
+  it('maps the worst value to red and the best to green for higher_is_better', () => {
+    expect(shadeFor(0, domain, 'higher_is_better')!.position).toBe(0);
+    expect(shadeFor(10, domain, 'higher_is_better')!.position).toBe(1);
+  });
+
+  it('inverts the scale for lower_is_better, so green is low', () => {
+    expect(shadeFor(0, domain, 'lower_is_better')!.position).toBe(1);
+    expect(shadeFor(10, domain, 'lower_is_better')!.position).toBe(0);
+  });
+
+  it('returns no scale at all for neutral', () => {
+    expect(shadeFor(5, domain, 'neutral')).toBeNull();
+  });
+
+  it('uses a declared expected_range as the domain, not the observed values', () => {
+    const declared = { kind: 'range' as const, min: 0, max: 100 };
+    expect(shadeFor(10, declared, 'higher_is_better')!.position).toBeCloseTo(0.1, 6);
+  });
+
+  it('fixes the domain at 0 to 1 for a rate, because absolute level matters', () => {
+    expect(shadeFor(0.5, { kind: 'rate' }, 'higher_is_better')!.position).toBeCloseTo(0.5, 6);
+  });
+
+  it('uses option rank for an ordinal enum, top of the list being the lowest rank', () => {
+    const ordinal = { kind: 'ordinal' as const, options: ['none', 'park', 'low', 'high'] };
+    expect(shadeFor('none', ordinal, 'higher_is_better')!.position).toBe(0);
+    expect(shadeFor('high', ordinal, 'higher_is_better')!.position).toBe(1);
+  });
+
+  it('returns null for a missing value, which the caller renders as the grey em dash', () => {
+    expect(shadeFor(null, domain, 'higher_is_better')).toBeNull();
+    expect(shadeFor(undefined, domain, 'higher_is_better')).toBeNull();
+  });
+
+  it('falls back to a flat mid colour when min equals max', () => {
+    const flat = shadeFor(7, { kind: 'range', min: 7, max: 7 }, 'higher_is_better')!;
+    expect(flat.position).toBe(0.5);
+    expect(flat.flat).toBe(true);
+  });
+
+  it('varies lightness monotonically across the ramp, so it survives colour blindness', () => {
+    const lightnesses = [0, 0.25, 0.5, 0.75, 1].map(
+      (p) => shadeFor(p * 10, domain, 'higher_is_better')!.lightness,
+    );
+    const ascending = lightnesses.every((l, i) => i === 0 || l > lightnesses[i - 1]!);
+    const descending = lightnesses.every((l, i) => i === 0 || l < lightnesses[i - 1]!);
+    expect(ascending || descending).toBe(true);
+  });
+
+  it('never emits brand yellow, which is reserved and never appears in data ink', () => {
+    for (let v = 0; v <= 10; v += 1) {
+      expect(shadeFor(v, domain, 'higher_is_better')!.background.toUpperCase()).not.toContain('FFEA07');
+    }
+  });
+});
 ```
+
+`ShadedValue.test.tsx` adds one case: **the numeric value is always printed in the cell**, whatever the shading, including when `shadeFor` returns null.
 
 `ShadedValue.test.tsx` asserts the numeric value is **always printed**, whatever the shading.
 
@@ -16071,14 +17047,75 @@ git add -A && git commit -m "feat(server): add the admin cascade deletes with an
 - [ ] **Step 1: Write the failing test**
 
 ```tsx
-  it('names the object and the exact counts it will destroy');
-  it('requires the name to be typed for a season, a form and a form version');
-  it('uses a plain confirm with no typing for a single entry');
-  it('puts the destructive verb on the primary button, not "OK"');
-  it('tells the admin to run supabase db dump first, and links to the runbook line');
-  it('shows a blocked panel with no confirm control when the server refuses an orphaning delete');
-  it('disables the confirm button until the typed name matches exactly, including case');
-  it('closes without deleting when cancelled, and calls nothing');
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import { DeleteDialog } from './DeleteDialog';
+
+const impact = { events: 2, matches: 4, entries: 12, forms: 1, form_versions: 2 };
+
+describe('DeleteDialog (SPEC-FINAL 17.8)', () => {
+  it('names the object and the exact counts it will destroy', async () => {
+    render(<DeleteDialog kind="season" name="CRESCENDO 2026" impact={impact} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('CRESCENDO 2026');
+    expect(dialog).toHaveTextContent('12 entries');
+    expect(dialog).toHaveTextContent('4 matches');
+  });
+
+  it('requires the name to be typed for a season, a form and a form version', async () => {
+    for (const kind of ['season', 'form', 'form_version'] as const) {
+      const { unmount } = render(<DeleteDialog kind={kind} name="X" impact={impact} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+      expect(screen.getByLabelText(/type the name to confirm/i)).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('uses a plain confirm with no typing for a single entry', () => {
+    render(<DeleteDialog kind="entry" name="Qualification 12 · 2096" impact={{ entries: 1 }} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.queryByLabelText(/type the name/i)).not.toBeInTheDocument();
+  });
+
+  it('puts the destructive verb on the primary button, not "OK"', () => {
+    render(<DeleteDialog kind="season" name="X" impact={impact} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /delete season/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^ok$/i })).not.toBeInTheDocument();
+  });
+
+  it('tells the admin to run supabase db dump first', () => {
+    render(<DeleteDialog kind="season" name="X" impact={impact} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.getByText(/supabase db dump/)).toBeInTheDocument();
+  });
+
+  it('shows a blocked panel with no confirm control when the delete would orphan data', () => {
+    render(<DeleteDialog kind="form_version" name="v1" impact={impact} blocked="this version has 4 entries bound to it" onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.getByText(/4 entries bound to it/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/type the name/i)).not.toBeInTheDocument();
+  });
+
+  it('disables the confirm button until the typed name matches exactly, including case', async () => {
+    const user = userEvent.setup();
+    render(<DeleteDialog kind="season" name="CRESCENDO" impact={impact} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    const button = screen.getByRole('button', { name: /delete season/i });
+    expect(button).toBeDisabled();
+    await user.type(screen.getByLabelText(/type the name to confirm/i), 'crescendo');
+    expect(button).toBeDisabled();
+    await user.clear(screen.getByLabelText(/type the name to confirm/i));
+    await user.type(screen.getByLabelText(/type the name to confirm/i), 'CRESCENDO');
+    expect(button).toBeEnabled();
+  });
+
+  it('closes without deleting when cancelled, and calls nothing', async () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const user = userEvent.setup();
+    render(<DeleteDialog kind="season" name="X" impact={impact} onConfirm={onConfirm} onCancel={onCancel} />);
+    await user.click(screen.getByRole('button', { name: /cancel/i }));
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+});
 ```
 
 - [ ] **Step 2: Implement, run, commit**
@@ -16114,18 +17151,51 @@ git add -A && git commit -m "feat(client): add the single destructive-action pat
 - [ ] **Step 1: Write the tests**
 
 ```ts
-  it('health: the endpoint performs a database read');
-  it('auth: login with a seeded CI account returns a usable token');
-  it('auth: an unauthenticated call to a registry route is refused with 401');
-  it('auth: a token more than seven days old comes back with X-Refreshed-Token');
-  it('context: getActiveContext returns the CI season and event');
-  it('form: getFormVersion returns the CI form fields in display order with their scoring');
-  it('entry: syncPush applies a create, and syncPull reads the same row back');
-  it('metric: rankTeams returns the CI team with the average points that entry implies');
-  it('cleanup: the CI season and every row under it are removed');
+  it('auth: login with the seeded CI account returns a usable token', async () => {
+    const res = await fetch(`${base}/api/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: ids.username, password: CI_PASSWORD }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { token: string; user: { role: string } };
+    expect(body.user.role).toBe('admin');
+    token = body.token;
+  });
+
+  it('auth: an unauthenticated call to a registry route is refused with 401', async () => {
+    const res = await fetch(`${base}/api/listUsers`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(res.status).toBe(401);
+    expect((await res.json()).error.code).toBe('unauthenticated');
+  });
+
+  it('context: getActiveContext returns a season and an event', async () => {
+    const res = await fetch(`${base}/api/getActiveContext`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: '{}',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toHaveProperty('active_season_id');
+  });
+
+  it('metric: rankTeams returns the CI team with the average points that entry implies', async () => {
+    const res = await fetch(`${base}/api/rankTeams`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ event_id: ids.event }),
+    });
+    expect(res.status).toBe(200);
+    const table = (await res.json()) as { rows: { team_id: string; average_points: number | null }[] };
+    const row = table.rows.find((r) => r.team_id === ids.team)!;
+    // one entry, ci_counter = 4, one point per unit
+    expect(row.average_points).toBeCloseTo(4, 6);
+  });
 ```
 
-each written in full, using `fixtures.ts` to create and tear down the namespaced season.
+with `let token = '';` and `const CI_PASSWORD = 'ci-smoke-pass-1';` declared at module scope, and the `beforeAll` fixture creating the CI user with `bcryptjs.hashSync(CI_PASSWORD, 10)` and role `admin`.
+
 
 - [ ] **Step 2: Run against the preview deployment and in CI**
 
@@ -16405,7 +17475,9 @@ Cross-checked against SPEC-FINAL Appendix A. If a build chat proposes any of the
 
 # Appendix P4 — Decisions taken during verification
 
-The plan was checked by two independent passes before it was finished: one reading `SPEC-FINAL.md` and the plan side by side for missing requirements, one reading the plan alone, cold, as the engineer who has to run it. These are the decisions those passes forced. They continue Appendix P1's numbering.
+The plan was checked by **three** passes: one reading `SPEC-FINAL.md` and the plan side by side for missing requirements, one reading the plan alone as the engineer who has to run it, and — after the first round of fixes was applied — a third checking that those fixes had actually landed and had not broken anything. The third pass was worth running: it found that **nine of the twenty-seven fixes claimed below had been mis-applied, half-applied or falsely reported**, including two that made the plan worse than before. Those are corrected here and marked.
+
+These are the decisions the three passes forced. They continue Appendix P1's numbering.
 
 | # | The gap | The decision | Where it lands |
 |---|---|---|---|
@@ -16437,6 +17509,25 @@ The plan was checked by two independent passes before it was finished: one readi
 | P80 | The seed declared a super form and never created one | **The super form, its version and its two fields are seeded**, so both v1 form kinds exist in dev | Task 0.14 |
 | P81 | Task 0.15's expected output contradicted its own fallback note about nothing being deployed | The task now says plainly: **open the branch, do task 0.17, then merge and watch it go green** | Task 0.15 |
 
+**Round three — fixes to the fixes.** Every row below is a defect the third pass found in the work recorded above it.
+
+| # | What round two got wrong | The correction |
+|---|---|---|
+| P82 | **P68 was half-applied.** `syncPush` called `validateEntryShape`; `submitEntry` kept an ad-hoc check that tested one of the three §3.5 rules | `submitEntry` calls the same shared function. Task 1.7 |
+| P83 | **P65 was false.** Task 1.23's new tests used `ctx.entryCountsBySeason`, which no task declared — and a parenthetical asserted it did | `Store.countEntriesBySeason` and `FakeContext.entryCountsBySeason` declared in task 1.3, like everything else |
+| P84 | **P64 was false for five tasks.** 1.11, 1.13, 1.18, 1.27 and 1.40 still listed `core/context.ts` as a file to modify; 1.11 re-declared `StoredFullUser` **without `created_at`** | All five now replace stubs in `repos/store.ts` and the fake. The interface is declared once, in 1.3 |
+| P85 | **P74 never reached the code.** `received_by_qr` was described in task 1.48's prose and declared nowhere | Declared in task 1.5's `SyncStateRecord`, indexed in Dexie, and set by `enqueue` and `ackResults` |
+| P86 | **The 1.23 → 1.18 exception was circular.** 1.23 *modified* `seasons.ts`, which 1.18 *creates* | Task 1.18 absorbs the whole image-manifest contract — asset, generator, manifest, shared export, CI check — and consumes it in the same diff. 1.23 keeps the client half. The preamble's exception table drops to one row |
+| P87 | **Task 0.14's field ids collided.** Deriving them from the version id by `slice(0, -3)` collapsed all three versions onto one id set; the upserts overwrote each other and the **match form ended with no fields**, silently | A `SEED.formField(versionIndex, fieldIndex)` allocator, plus a test asserting both match versions keep their five fields |
+| P88 | Task 0.14 used `SEED_SUPER_FIELDS` without importing it | Imported |
+| P89 | **Task 1.13's `createUser` returned the store row**, bcrypt hash included, and failed its own test | One `toPublicUser` mapper that every user-returning use case goes through |
+| P90 | **Task 1.40 was about to delete task 1.14's edit-window guard.** Its `applyEntry` rewrite started at the parent check and never mentioned the ownership or `edit-window-expired` branches | An explicit "keep 1.14's guard" note, naming what happens if 1.14's tests go red |
+| P91 | Task 1.12's dispatcher called a four-argument handler with three, and the registry imported a `loginOutput` schema that did not exist | `config` is passed; `loginOutput` is exported from `login.ts` as a Zod object |
+| P92 | Task 1.12 registered `changeOwnPassword`, whose module task **1.13** creates | The registry ships `login` + `refreshToken`; 1.13 adds the rest and updates the brittle key test |
+| P93 | **128 tests across 14 tasks were bare `it('name');` lines** — legal Vitest *todos*, reported green — while Appendix P5 claimed every test file was complete | All 14 written out. P5 now says so accurately, and says what it got wrong |
+| P94 | Three tasks each claimed to replace the sync `callerFor`, and one comment pointed at a client-side task | Task 1.12 owns it, in `composition.ts`. 1.3's comment and 1.14's duplicate instruction corrected |
+| P95 | `supabaseStore` was typed `: Store` and implemented 6 of 65 methods | Both implementations spread the same `stubsFor([...])`, defined once in `repos/store.ts` |
+
 ---
 
 # Appendix P5 — Known gaps in this plan
@@ -16445,11 +17536,13 @@ Written so that nothing is hidden. Everything below is a **deliberate remaining 
 
 ### 1. Some UI tasks specify a component by contract, not by code
 
-Roughly a dozen client tasks give the component's **file, props, DOM structure, ARIA roles, exact copy and its full test file**, but describe the render body in prose rather than printing it. They are: **1.17** (`StateMessage`, `ConfirmDialog`, the users pages), **1.20 – 1.22** (the admin panels and the context page), **1.29 – 1.31** (the builder shell, settings pane and preview), **1.34**, **1.37**, **1.38**, **1.42 – 1.44**, **1.51 – 1.53**, **1.58 – 1.61**.
+**Every test file in this plan is now written out in full.** An earlier revision of this appendix claimed that and was wrong — 128 tests across 14 tasks were bare `it('name');` lines, which Vitest treats as *todo* and reports green. They are written. If you find another one, it is a bug in this plan, not a style.
 
-Why this is tolerable: the **test file is complete** in each case, and the tests assert on roles, labels, copy and behaviour. An agent that satisfies them has very little room to invent. Why it is still a gap: the diff will be less predictable than for the server and engine tasks, and the review will take longer.
+What remains is narrower: **these tasks give the component's file, props, DOM structure, ARIA roles and exact copy, and a complete test file, but describe the render body in prose rather than printing it** — **1.17** (`StateMessage`, `ConfirmDialog`, the users pages), **1.20 – 1.22** (the admin panels and the context page), **1.29 – 1.31** (the builder shell, settings pane and preview), **1.34**, **1.37**, **1.38**, **1.42 – 1.44**, **1.51 – 1.53**, **1.58**, **1.59**, **1.61**.
 
-**If you want them closed**, the cheapest route is to run one planning chat per group (C, D, E, H) that expands only those tasks, using the finished tasks — 1.7, 1.8, 1.23, 1.33 — as the house style. That is four chats, and it can happen while phase 0 is being built.
+Why this is tolerable: the tests assert on roles, labels, copy and behaviour, so an agent that satisfies them has little room to invent. Why it is still a gap: the diff will be less predictable than for the server, database and engine tasks, and the review will take longer.
+
+**If you want them closed**, the cheapest route is one planning chat per group (C, D, E, H) that expands only those tasks, using the finished ones — 1.7, 1.8, 1.23, 1.33 — as the house style. That is four chats, and it can happen while phase 0 is being built.
 
 ### 2. Two features are named but their entry point is only sketched
 
@@ -16460,18 +17553,19 @@ Why this is tolerable: the **test file is complete** in each case, and the tests
 
 Each is a line or two of work; they are listed so they can be swept into the nearest task rather than discovered at an event.
 
+**Stated in a task, but with no test to hold it:** the two-column entry form at tablet width (§8.6, §17.3 — task 1.38's Rules block says it), the sync page's list of what **did** sync (§9.10 — task 1.43's Interfaces line says it), and what "all metrics for the team" means in phase 1 (§13.1 — task 1.57's Interfaces line says it). Each needs a case, not a new home.
+
+**Owned by no task at all:**
+
 | Detail | SPEC-FINAL | Suggested home |
 |---|---|---|
 | Skeletons, not spinners, for lists and tables | §17.8 | 1.17, beside `StateMessage` |
 | The "update ready" hint actually rendered | §9.1 | 1.8, in `AppShell` |
 | Practice mode's entry point (a route or a toggle) | §8.5 | 1.37 |
 | Undo on multi-select and on timer reset | §8.2 | 1.33, 1.34 |
-| Two-column entry form at tablet width | §8.6, §17.3 | 1.38 |
 | Delta pull on screen entry and on pull-to-refresh | §9.3, §10 | 1.8 |
 | The "this event no longer exists" notice | §9.3 | 1.8 |
-| The sync page's list of what **did** sync | §9.10 | 1.43 |
 | Computed fields recomputed **at read time** by the engine | §5.7 | 1.54, consumed by 1.50 and 1.57 |
-| "All metrics for the team" defined for phase 1 | §13.1 | 1.57, alongside the fixed ranking columns |
 | The 100 ms tap and 2 s sync latency targets, measured | §18.1 | 1.63's offline check |
 
 ### 4. The typed client is half-built
