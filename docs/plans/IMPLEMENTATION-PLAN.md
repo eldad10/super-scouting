@@ -108,16 +108,15 @@ Every task's requirements implicitly include this section. Values are copied ver
 | **Phase 1 K — smoke suite and gate** | 1.62 – 1.64 | The full CI smoke suite, `RUNBOOK.md`, the phase 1 gate rehearsal. |
 | **Phase 2** | headings only | Re-planned after the phase 1 gate passes. |
 
-### Two tasks run out of numeric order
+### Three tasks run out of numeric order
 
-The numbering follows SPEC-FINAL §20.2's order exactly. **Two tasks must nonetheless be executed before their numeric neighbours**, because a dependency runs backwards. Both are called out again at the head of their group.
+The numbering follows SPEC-FINAL §20.2's order exactly. **Three tasks must nonetheless be executed before their numeric neighbour**, because one dependency runs backwards. It is called out again at the head of its group.
 
 | Run this first | Before | Why |
 |---|---|---|
-| **1.23** — the season game-image pipeline | **1.18** — season and event use cases | `createSeason` refuses a `field_image_path` that does not resolve (§6.4). The manifest it checks against is what 1.23 generates, so 1.18's image-path test cannot pass until 1.23 exists. |
 | **1.54, 1.55, 1.56** — the metric engine | **1.50** — the browse and search queries | §13.3 requires every entry-search row to carry its **scouted points**, and §11.1 allows exactly one scoring implementation. `queryEntries` calls `scoreEntry`, which 1.54 builds. |
 
-So the execution order is: … 1.23, 1.18, 1.19, 1.20, 1.21, 1.22, 1.24 … and later … 1.49, 1.54, 1.55, 1.56, 1.50, 1.51, 1.52, 1.57, 1.53, 1.58 …
+So the execution order is: … 1.49, **1.54, 1.55, 1.56**, 1.50, 1.51, 1.52, **1.57**, 1.53, 1.58 …
 
 If you would rather the file read in execution order, renumber it once before the first build chat and never again — but do not renumber halfway through, because the commit messages and the branch names will stop matching.
 
@@ -5593,7 +5592,7 @@ describe('syncPush', () => {
 
 ```ts
 import type { FormFieldDefinition } from '@frc/shared';
-import type { UseCaseContext } from '../core/context';
+import type { StoredFullUser, StoredUser, UseCaseContext } from '../core/context';
 
 export type FakeRow = Record<string, unknown> & { id: string; version: number };
 
@@ -5622,6 +5621,7 @@ export type FakeContext = UseCaseContext & {
   knownEvents: Set<string>;
   missingParents: Set<string>;
   entryCountsByMatch: Map<string, number>;
+  entryCountsBySeason: Map<string, number>;
   entryCountsByVersion: Map<string, number>;
   ops: Set<string>;
   appliedOrder: string[];
@@ -5682,6 +5682,7 @@ export function makeFakeContext(): FakeContext {
     knownEvents: new Set(['ev-1']),
     missingParents: new Set<string>(),
     entryCountsByMatch: new Map(),
+    entryCountsBySeason: new Map(),
     entryCountsByVersion: new Map(),
     ops,
     appliedOrder,
@@ -5730,7 +5731,7 @@ export function makeFakeContext(): FakeContext {
         'listSeasons', 'getEvent', 'insertEvent', 'updateEvent', 'listEvents', 'getTeam',
         'getTeamByNumber', 'insertTeam', 'updateTeam', 'listTeams', 'getRoster', 'setRoster',
         'findMatch', 'insertMatch', 'listMatches', 'setMatchTeams', 'countEntriesByMatch',
-        'deleteMatch', 'getForm', 'getFormByKind', 'insertForm', 'updateForm', 'getFormVersion',
+        'countEntriesBySeason', 'deleteMatch', 'getForm', 'getFormByKind', 'insertForm', 'updateForm', 'getFormVersion',
         'listFormVersions', 'insertFormVersion', 'updateFormVersion', 'countEntriesByFormVersion',
         'replaceFormFields', 'getScoringRules', 'replaceScoringRules', 'getEntry', 'queryEntries',
         'entriesForScope', 'listTeamEvents', 'deleteSeason', 'deleteEvent', 'deleteFormCascade',
@@ -5740,17 +5741,9 @@ export function makeFakeContext(): FakeContext {
   });
 }
 
-function stubsFor(names: string[]): Record<string, () => Promise<never>> {
-  return Object.fromEntries(
-    names.map((name) => [
-      name,
-      async (): Promise<never> => {
-        throw new Error(`Store.${name} is not implemented yet — it lands with its own task`);
-      },
-    ]),
-  );
-}
 ```
+
+`stubsFor` is imported from `../repos/store`, not redefined — one helper, one message.
 
 - [ ] **Step 3: Run and watch fail**
 
@@ -5864,6 +5857,7 @@ export type Store = {
   listMatches(eventId: string, limit: number, cursor?: string): Promise<StoredRow[]>;
   setMatchTeams(matchId: string, slots: Record<string, unknown>[]): Promise<void>;
   countEntriesByMatch(matchId: string): Promise<number>;
+  countEntriesBySeason(seasonId: string): Promise<number>;
   deleteMatch(id: string): Promise<void>;
 
   // forms and scoring (tasks 1.27, 1.28)
@@ -6101,7 +6095,37 @@ export function supabaseStore(db: Db): Store {
       const { data } = await db.from('form_fields').select('*').eq('form_version_id', formVersionId);
       return (data ?? []) as unknown as FormFieldDefinition[];
     },
+    // The other 59 methods start as loud stubs, exactly as the fake does. Each later
+    // task replaces the two or three it needs. `supabaseStore` is typed `: Store`, so
+    // without these the file does not compile at all.
+    ...stubsFor([
+      'findByLogicalKey', 'parentsExist', 'insertConflict', 'listConflicts', 'getConflict',
+      'resolveConflictRow', 'eventExists', 'resolveScope', 'pullEntity', 'getUserByUsername',
+      'insertUser', 'updateUser', 'listUsers', 'countEnabledAdmins', 'getActiveContext',
+      'setActiveContext', 'getSeason', 'getSeasonByYear', 'insertSeason', 'updateSeason',
+      'listSeasons', 'getEvent', 'insertEvent', 'updateEvent', 'listEvents', 'getTeam',
+      'getTeamByNumber', 'insertTeam', 'updateTeam', 'listTeams', 'getRoster', 'setRoster',
+      'findMatch', 'insertMatch', 'listMatches', 'setMatchTeams', 'countEntriesByMatch',
+      'countEntriesBySeason', 'deleteMatch', 'getForm', 'getFormByKind', 'insertForm',
+      'updateForm', 'getFormVersion', 'listFormVersions', 'insertFormVersion',
+      'updateFormVersion', 'countEntriesByFormVersion', 'replaceFormFields', 'getScoringRules',
+      'replaceScoringRules', 'getEntry', 'queryEntries', 'entriesForScope', 'listTeamEvents',
+      'deleteSeason', 'deleteEvent', 'deleteFormCascade', 'deleteFormVersion',
+      'countDeleteImpact',
+    ]),
   };
+}
+
+/** Shared by both Store implementations. A missing method fails by name, never as undefined. */
+export function stubsFor(names: string[]): Record<string, () => Promise<never>> {
+  return Object.fromEntries(
+    names.map((name) => [
+      name,
+      async (): Promise<never> => {
+        throw new Error(`Store.${name} is not implemented yet — it lands with its own task`);
+      },
+    ]),
+  );
 }
 ```
 
@@ -6162,8 +6186,9 @@ import type { UseCaseContext } from '../core/context';
 export type SyncRouteDeps = {
   ctx: UseCaseContext;
   /**
-   * Builds the caller at the transport edge (SPEC-FINAL 16.5). Task 1.15 replaces the
-   * walking skeleton's implementation with the bearer token; nothing else changes.
+   * Builds the caller at the transport edge (SPEC-FINAL 16.5). Task 1.12 replaces the
+   * walking skeleton's implementation with the bearer token, in composition.ts and
+   * nowhere else; this signature does not change.
    */
   callerFor: (request: Request, fallbackUserId: string | null) => Promise<Caller | null>;
 };
@@ -7632,7 +7657,12 @@ export async function cachedEntry(rowId: string): Promise<Record<string, unknown
 `apps/client/src/features/entry/submitEntry.ts`:
 
 ```ts
-import { validateEntryData, type FormFieldDefinition, type RobotStatus } from '@frc/shared';
+import {
+  validateEntryData,
+  validateEntryShape,
+  type FormFieldDefinition,
+  type RobotStatus,
+} from '@frc/shared';
 import { db } from '@/data/db';
 import { enqueue, nextSeq } from '@/data/outbox';
 
@@ -7661,9 +7691,18 @@ export async function submitEntry(input: SubmitEntryInput): Promise<{ row_id: st
   const dead = input.robotStatus === 'no_show' || input.robotStatus === 'disabled';
   const data = dead ? {} : input.data;
 
-  if (input.formKind === 'match' && (input.robotStatus === null || input.alliance === null)) {
-    throw new Error('a match entry needs an alliance and a robot status');
-  }
+  // The same three SPEC-FINAL 3.5 rules the server enforces on push. Checking them here
+  // too is what turns a server rejection into a message the scouter sees before they
+  // leave the screen.
+  const shapeIssues = validateEntryShape({
+    form_kind: input.formKind,
+    match_id: input.matchId,
+    alliance: input.formKind === 'match' ? input.alliance : null,
+    robot_status: input.formKind === 'match' ? input.robotStatus : null,
+    breakdown_seconds: input.robotStatus === 'broke_down' ? (input.breakdownSeconds ?? null) : null,
+  });
+  if (shapeIssues.length > 0) throw new Error(shapeIssues.join('
+'));
 
   const validation = validateEntryData(input.fields, input.robotStatus ?? 'played', data);
   if (!validation.ok) {
@@ -8130,7 +8169,7 @@ git add -A && git commit -m "feat(client): add the skeleton entry screen with dr
 
 **Files:**
 - Create: `apps/client/src/routes.tsx`, `apps/client/src/features/shell/AppShell.tsx`, `apps/client/src/features/shell/ConnectionIndicator.tsx`, `apps/client/src/features/shell/ConnectionIndicator.test.tsx`
-- Create: `apps/client/src/features/entry/SelectRobotPage.tsx`
+- Create: `apps/client/src/features/entry/SelectRobotPage.tsx`, `apps/client/src/features/entry/EntryRoute.tsx`
 - Create: `apps/client/src/features/entries/EntriesPage.tsx`, `apps/client/src/features/entries/EntriesPage.test.tsx`
 - Modify: `apps/client/src/App.tsx`, `apps/client/package.json` (add `"react-router-dom": "^7.0.1"`, `"@tanstack/react-query": "^5.59.20"`)
 
@@ -8926,7 +8965,7 @@ git add -A && git commit -m "feat(shared): encode the permission matrix and the 
 - Create: `apps/server/src/auth/password.ts`, `apps/server/src/auth/token.ts`, `apps/server/src/auth/token.test.ts`
 - Create: `apps/server/src/auth/rateLimit.ts`, `apps/server/src/auth/rateLimit.test.ts`
 - Create: `apps/server/src/core/commands/login.ts`, `apps/server/src/core/commands/login.test.ts`
-- Modify: `apps/server/src/core/context.ts` (add `getUserByUsername`), `apps/server/src/test/fake-context.ts`, `apps/server/package.json` (add `"bcryptjs": "^2.4.3"`, `"jose": "^5.9.6"`)
+- Modify: `apps/server/src/repos/store.ts`, `apps/server/src/test/fake-context.ts`, `apps/server/package.json` (add `"bcryptjs": "^2.4.3"`, `"@types/bcryptjs": "^2.4.6"`, `"jose": "^5.9.6"`)
 
 **Interfaces:**
 - Produces: `hashPassword(plain)` and `verifyPassword(plain, hash)` — **bcrypt, cost 10, via `bcryptjs`** (pure JS, no native build step on Vercel Functions); `issueToken(user, config)` and `verifyToken(raw, config)` — **HS256 JWT** with claims `sub`, `role`, `username`, `iat`, `exp`; `shouldRefresh(claims, config)`; `login(input, ctx, config)` — **takes no caller: it produces one**.
@@ -9043,6 +9082,7 @@ beforeEach(async () => {
     password_hash: await hashPassword('correct horse'),
     must_change_password: false,
     disabled_at: null,
+    created_at: '2026-11-01T00:00:00.000Z',
   });
 });
 
@@ -9216,16 +9256,18 @@ export const loginInput = z.object({
 });
 export type LoginInput = z.infer<typeof loginInput>;
 
-export type LoginOutput = {
-  token: string;
-  user: {
-    id: string;
-    username: string;
-    full_name: string;
-    role: 'scouter' | 'lead' | 'admin';
-    must_change_password: boolean;
-  };
-};
+export const loginOutput = z.object({
+  token: z.string(),
+  user: z.object({
+    id: z.string().uuid(),
+    username: z.string(),
+    full_name: z.string(),
+    role: z.enum(['scouter', 'lead', 'admin']),
+    must_change_password: z.boolean(),
+  }),
+});
+
+export type LoginOutput = z.infer<typeof loginOutput>;
 
 /**
  * Module-level, so it survives between requests on a warm function instance — and
@@ -9272,20 +9314,20 @@ export async function login(
 }
 ```
 
-Add to `Store` in `apps/server/src/core/context.ts`:
+`Store.getUserByUsername` and `StoredFullUser` **already exist** — task 1.3 declared the whole interface. This task only replaces the stub, in `apps/server/src/repos/store.ts`:
 
 ```ts
-export type StoredFullUser = StoredUser & {
-  username: string;
-  full_name: string;
-  password_hash: string;
-  must_change_password: boolean;
-};
-
-  getUserByUsername(usernameLower: string): Promise<StoredFullUser | null>;
+    async getUserByUsername(usernameLower: string): Promise<StoredFullUser | null> {
+      const { data } = await db
+        .from('users')
+        .select('id, username, full_name, password_hash, role, must_change_password, disabled_at, created_at')
+        .ilike('username', usernameLower)
+        .maybeSingle();
+      return (data as StoredFullUser | null) ?? null;
+    },
 ```
 
-and implement it in `apps/server/src/repos/store.ts` with `.ilike('username', usernameLower)`.
+and the matching entry in the fake, reading `ctx.usersByName`. Delete both names from the `stubsFor([...])` lists as you go — a stub left behind shadows the real method.
 
 - [ ] **Step 4: Run and watch pass**
 
@@ -9352,8 +9394,8 @@ describe('the use-case registry (SPEC-FINAL 16.4)', () => {
     expect(open.sort()).toEqual(['login', 'refreshToken']);
   });
 
-  it('holds at least the three entries this task registers', () => {
-    expect(Object.keys(REGISTRY).sort()).toEqual(['changeOwnPassword', 'login', 'refreshToken']);
+  it('holds exactly the entries registered so far', () => {
+    expect(Object.keys(REGISTRY).sort()).toEqual(['login', 'refreshToken']);
   });
 });
 ```
@@ -9478,7 +9520,7 @@ export async function callerFor(
 }
 ```
 
-`apps/server/src/routes/registry.ts` — the shape **and** the three entries that exist by the end of this task. Later tasks add rows to `REGISTRY`; **no later task changes `RegistryEntry`**:
+`apps/server/src/routes/registry.ts` — the shape **and** the two entries that exist by the end of this task. Later tasks add rows to `REGISTRY`; **no later task changes `RegistryEntry`**:
 
 ```ts
 import { z } from 'zod';
@@ -9487,7 +9529,6 @@ import type { ServerConfig } from '../config';
 import type { UseCaseContext } from '../core/context';
 import { login, loginInput, loginOutput } from '../core/commands/login';
 import { refreshToken, refreshTokenInput } from '../core/commands/refreshToken';
-import { changeOwnPassword, changeOwnPasswordInput } from '../core/commands/users';
 
 export type RegistryEntry = {
   kind: 'query' | 'command';
@@ -9523,13 +9564,6 @@ export const REGISTRY: Record<string, RegistryEntry> = {
     output: loginOutput,
     unauthenticated: true,
     handler: (_caller, input, ctx, config) => refreshToken(input as never, ctx, config),
-  },
-  changeOwnPassword: {
-    kind: 'command',
-    description: 'Change the calling user’s own password. Never anybody else’s.',
-    input: changeOwnPasswordInput,
-    output: z.object({ ok: z.literal(true) }),
-    handler: (caller, input, ctx) => changeOwnPassword(caller, input as never, ctx),
   },
 };
 ```
@@ -9582,7 +9616,7 @@ export function rpcRoutes(ctx: UseCaseContext, config: ServerConfig): Hono {
       }
 
       try {
-        const output = await entry.handler(caller, parsedInput.data as never, ctx);
+        const output = await entry.handler(caller, parsedInput.data as never, ctx, config);
         return c.json(entry.output.parse(output));
       } catch (e) {
         if (e instanceof AppError) {
@@ -9675,7 +9709,7 @@ git add -A && git commit -m "feat(server): build the caller at the HTTP edge and
 **Files:**
 - Create: `apps/server/src/core/commands/users.ts`, `apps/server/src/core/commands/users.test.ts`
 - Create: `apps/server/src/core/queries/listUsers.ts`, `apps/server/src/core/queries/listUsers.test.ts`
-- Modify: `apps/server/src/routes/registry.ts`, `apps/server/src/core/context.ts`, `apps/server/src/repos/store.ts`, `apps/server/src/test/fake-context.ts`
+- Modify: `apps/server/src/routes/registry.ts`, `apps/server/src/repos/store.ts`, `apps/server/src/test/fake-context.ts`
 
 **Interfaces:**
 - Produces: `createUser`, `setUserRole`, `resetPassword`, `disableUser`, `changeOwnPassword`, `listUsers` — the Appendix C rows for users, all admin-only except `changeOwnPassword` (any authenticated user, own account only).
@@ -9790,7 +9824,7 @@ Expected: `Failed to resolve import "./users"`.
 import { AppError, assertCan, isUser, type Caller } from '@frc/shared';
 import { z } from 'zod';
 import { hashPassword, verifyPassword, MIN_PASSWORD_LENGTH } from '../../auth/password';
-import type { UseCaseContext } from '../context';
+import type { StoredFullUser, UseCaseContext } from '../context';
 
 const password = z.string().min(MIN_PASSWORD_LENGTH, `at least ${MIN_PASSWORD_LENGTH} characters`);
 
@@ -9822,7 +9856,7 @@ export async function createUser(
   if (await ctx.store.getUserByUsername(username)) {
     throw new AppError('conflict', `the username '${username}' is taken`);
   }
-  return ctx.store.insertUser({
+  const stored = await ctx.store.insertUser({
     id: crypto.randomUUID(),
     username,
     full_name: parsed.full_name.trim(),
@@ -9830,10 +9864,37 @@ export async function createUser(
     password_hash: await hashPassword(parsed.password),
     must_change_password: false,
   });
+  return toPublicUser(stored);
+}
+
+/**
+ * The one place a stored user becomes a returned user. It drops `password_hash`
+ * explicitly rather than by omission, because SPEC-FINAL 18.5 and Appendix C both say
+ * the hash leaves the server on the syncPull path and nowhere else.
+ */
+export function toPublicUser(user: StoredFullUser): PublicUser {
+  return {
+    id: user.id,
+    username: user.username,
+    full_name: user.full_name,
+    role: user.role,
+    must_change_password: user.must_change_password,
+    disabled_at: user.disabled_at,
+    created_at: user.created_at,
+  };
 }
 ```
 
-`setUserRole`, `resetPassword` (with an optional `must_change`), `disableUser` (which refuses to disable the last enabled admin — a boring guard against locking yourself out) and `changeOwnPassword` follow the same shape. `disableUser` writes `disabled_at`; **there is no code path that deletes a `users` row.**
+`setUserRole`, `resetPassword` (with an optional `must_change`), `disableUser` (which refuses to disable the last enabled admin — a boring guard against locking yourself out) and `changeOwnPassword` follow the same shape: `assertCan` → parse → invariant → `ctx.store.updateUser(...)` → `toPublicUser`. **Every one of them returns through `toPublicUser`**, so there is exactly one place the hash could ever escape and it does not.
+
+**Register them.** This task adds `changeOwnPassword`, `createUser`, `setUserRole`, `resetPassword`, `disableUser` and `listUsers` to `REGISTRY`, and updates task 1.12's deliberately brittle test to:
+
+```ts
+    expect(Object.keys(REGISTRY).sort()).toEqual([
+      'changeOwnPassword', 'createUser', 'disableUser', 'listUsers',
+      'login', 'refreshToken', 'resetPassword', 'setUserRole',
+    ]);
+``` `disableUser` writes `disabled_at`; **there is no code path that deletes a `users` row.**
 
 `apps/server/src/core/queries/listUsers.ts` returns `{ items: PublicUser[]; next_cursor: string | null }`, defaulting `limit` to 50 and capping it at 200, and **selects an explicit column list that omits `password_hash`**.
 
@@ -9993,7 +10054,7 @@ and add the case that proves it:
   });
 ```
 
-In `apps/server/src/routes/sync.ts`, replace the walking-skeleton `callerFor` with the real `callerFor(c.req.raw, config, ctx.store)` and return 401 when it yields no caller.
+**`callerFor` is already the real one** — task 1.12 replaced it in `composition.ts`, and the sync routes receive it from there. Nothing about the transport changes in this task.
 
 - [ ] **Step 4: Run and watch pass**
 
@@ -10015,7 +10076,8 @@ git add -A && git commit -m "feat(server): authorize each pushed operation by it
 **Files:**
 - Create: `apps/client/src/auth/session.ts`, `apps/client/src/auth/session.test.ts`
 - Create: `apps/client/src/auth/LoginPage.tsx`, `apps/client/src/auth/LoginPage.test.tsx`, `apps/client/src/auth/ChangePasswordPage.tsx`
-- Modify: `apps/client/src/data/api.ts` (bearer + `X-Refreshed-Token`), `apps/client/src/data/api.test.ts`, `apps/client/src/routes.tsx`
+- Modify: `apps/client/src/data/api.ts` (bearer + `X-Refreshed-Token`), `apps/client/src/routes.tsx`
+- Create: `apps/client/src/data/api.test.ts`, `apps/client/src/data/rpc.ts` (the RPC client the login and change-password screens call)
 
 **Interfaces:**
 - Produces: `session` — a small store over Dexie with `current()`, `signIn(user, token)`, `signOut()`, `token()`, `subscribe(fn)`; `<LoginPage />`; the API client now attaches `Authorization: Bearer <token>` and **stores any `X-Refreshed-Token` it receives**.
@@ -10475,22 +10537,110 @@ git add -A && git commit -m "feat(client): add user administration, the desktop 
 
 ---
 
-## Task 1.18: Server — season, event and active-context use cases
+## Task 1.18: The season image manifest, and the season / event / active-context use cases
 
 **Files:**
+- Create: `apps/client/public/seasons/2026/field.webp` — the real game image for the current season
+- Create: `scripts/season-images.mjs`, `packages/shared/src/season/manifest.ts` (generated)
 - Create: `apps/server/src/core/commands/seasons.ts`, `apps/server/src/core/commands/events.ts`
 - Create: `apps/server/src/core/queries/context.ts`
 - Create: `apps/server/src/core/commands/seasons.test.ts`, `apps/server/src/core/commands/events.test.ts`
-- Modify: `apps/server/src/routes/registry.ts`, `apps/server/src/core/context.ts`, `apps/server/src/repos/store.ts`
+- Modify: `packages/shared/src/index.ts` (export the manifest), root `package.json` (the two `season:images` scripts), `.github/workflows/ci.yml` (the drift check)
+- Modify: `apps/server/src/routes/registry.ts`, `apps/server/src/repos/store.ts`, `apps/server/src/test/fake-context.ts` (implement `setActiveContext` and the season/event stubs)
 
 **Interfaces:**
-- Produces: `createSeason`, `updateSeason`, `setActiveSeason`, `createEvent`, `updateEvent`, `reorderEvents`, `setActiveEvent`, `getActiveContext`, `listSeasons`, `listEvents`. (`deleteSeason` / `deleteEvent` are task 1.60.)
+- Produces: `SEASON_IMAGE_MANIFEST` — the generated list of committed game-image paths, imported by both apps; `createSeason`, `updateSeason`, `setActiveSeason`, `createEvent`, `updateEvent`, `reorderEvents`, `setActiveEvent`, `getActiveContext`, `listSeasons`, `listEvents`. (`deleteSeason` / `deleteEvent` are task 1.60.)
 
-**Run task 1.23 before this one.** `createSeason` validates `field_image_path` against `SEASON_IMAGE_MANIFEST`, which task 1.23 generates. Everything else in this task stands alone.
+**Why the image manifest is in this task.** §6.4 says a season cannot be created without a game image that resolves, so `createSeason` has to check something. That something is a generated list of the `.webp` files actually committed under `apps/client/public/seasons/` — the server has no filesystem to look at, and §16.7 forbids uploading the image anywhere. Generating the list and consuming it in the same task keeps both halves verifiable in one diff. Task 1.23 then renders the image on the client.
 
-**Rules (SPEC-FINAL §6.3, §6.4, §3.1).** All admin-only. The active context is the **`app_settings` singleton**, and `active_event_id` may be null while a brand-new season has no events yet. `createSeason` **validates that `field_image_path` resolves** — a season cannot be created without a game image that exists. `reorderEvents` changes display order only and **never re-weights aggregates**.
+**Rules (SPEC-FINAL §6.3, §6.4, §3.1, §16.7).** All admin-only. The active context is the **`app_settings` singleton**, and `active_event_id` may be null while a brand-new season has no events yet. `createSeason` **validates that `field_image_path` resolves** — a season cannot be created without a game image that exists. `reorderEvents` changes display order only and **never re-weights aggregates**.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Commit the game image and generate the manifest**
+
+Put the season's game image at `apps/client/public/seasons/2026/field.webp` (WebP, the full field from the season's game manual, no larger than ~400 KB — it is precached on every device). Then:
+
+`scripts/season-images.mjs` walks `apps/client/public/seasons` and writes `packages/shared/src/season/manifest.ts`:
+
+```ts
+// GENERATED by `pnpm season:images`. Do not edit.
+export const SEASON_IMAGE_MANIFEST = ['seasons/2026/field.webp'] as const;
+export type SeasonImagePath = (typeof SEASON_IMAGE_MANIFEST)[number];
+```
+
+The script itself, in full:
+
+```js
+#!/usr/bin/env node
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, relative } from 'node:path';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SEASONS_DIR = join(ROOT, 'apps/client/public/seasons');
+const TARGET = join(ROOT, 'packages/shared/src/season/manifest.ts');
+
+function walk(dir) {
+  return readdirSync(dir).flatMap((name) => {
+    const full = join(dir, name);
+    return statSync(full).isDirectory() ? walk(full) : [full];
+  });
+}
+
+function render() {
+  let files = [];
+  try {
+    files = walk(SEASONS_DIR)
+      .filter((f) => f.endsWith('.webp'))
+      .map((f) => relative(join(ROOT, 'apps/client/public'), f).split('\\').join('/'))
+      .sort();
+  } catch {
+    files = [];
+  }
+  const entries = files.map((f) => `  '${f}',`).join('\n');
+  return [
+    '// GENERATED by `pnpm season:images`. Do not edit.',
+    '// SPEC-FINAL 16.7: the database stores only the path string; this list is what',
+    '// makes the server able to refuse a season whose image is not committed.',
+    `export const SEASON_IMAGE_MANIFEST = [\n${entries}\n] as const;`,
+    '',
+    'export type SeasonImagePath = (typeof SEASON_IMAGE_MANIFEST)[number];',
+    '',
+  ].join('\n');
+}
+
+const rendered = render();
+if (process.argv.includes('--check')) {
+  const current = readFileSync(TARGET, 'utf8');
+  if (current !== rendered) {
+    console.error('drift: packages/shared/src/season/manifest.ts is stale.');
+    console.error('Run `pnpm season:images` and commit the result.');
+    process.exit(1);
+  }
+} else {
+  writeFileSync(TARGET, rendered, 'utf8');
+  console.warn(`wrote ${TARGET}`);
+}
+```
+
+Add to the root `package.json`: `"season:images": "node scripts/season-images.mjs"` and `"season:images:check": "node scripts/season-images.mjs --check"`.
+
+Add `export * from './season/manifest';` to `packages/shared/src/index.ts` — without it, `images.test.ts`'s `import { SEASON_IMAGE_MANIFEST } from '@frc/shared'` does not resolve.
+
+**Also modify `.github/workflows/ci.yml`** (add it to this task's Files list), inserting a step beside `env:example:check`:
+
+```yaml
+      - name: Season image manifest has not drifted
+        run: pnpm season:images:check
+```
+
+```bash
+pnpm season:images && pnpm --filter @frc/client exec vitest run src/season 2>/dev/null || true
+cat packages/shared/src/season/manifest.ts
+```
+
+Expected: `wrote .../packages/shared/src/season/manifest.ts`, and the file lists exactly `'seasons/2026/field.webp'`.
+
+- [ ] **Step 2: Write the failing tests**
 
 `apps/server/src/core/commands/seasons.test.ts`:
 
@@ -10625,7 +10775,7 @@ describe('events (SPEC-FINAL 6.2, 6.3)', () => {
 });
 ```
 
-- [ ] **Step 2: Run and watch fail**
+- [ ] **Step 3: Run and watch fail**
 
 ```bash
 pnpm --filter @frc/server exec vitest run src/core/commands/seasons.test.ts src/core/commands/events.test.ts
@@ -10633,7 +10783,34 @@ pnpm --filter @frc/server exec vitest run src/core/commands/seasons.test.ts src/
 
 Expected: `Failed to resolve import "./seasons"`.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 4: Implement the image-path rules**
+
+In `apps/server/src/core/commands/seasons.ts` (task 1.18), `createSeason` and `updateSeason` refuse a `field_image_path` that is not in `SEASON_IMAGE_MANIFEST`, with the message *"commit apps/client/public/<path> and redeploy the client first"*.
+
+**And `updateSeason` refuses to change `field_image_path` at all once the season has entries** (§16.7: *the image is immutable once entries exist* — every stored `{x, y}` is normalized against that exact image, so swapping it silently re-frames all historical spatial data). The message says what to do instead: *"a new image means a new filename and a new form version — create the new form version, do not swap the image."* Its test:
+
+```ts
+  it('refuses to swap a season image once entries exist, naming the alternative', async () => {
+    ctx.entryCountsBySeason.set('se-1', 40);
+    await expect(
+      updateSeason(admin, { season_id: 'se-1', field_image_path: 'seasons/2027/field.webp' }, ctx),
+    ).rejects.toThrow(/new form version/i);
+  });
+
+  it('still allows the game name to be corrected on a season with entries', async () => {
+    ctx.entryCountsBySeason.set('se-1', 40);
+    await expect(updateSeason(admin, { season_id: 'se-1', game_name: 'CRESCENDO' }, ctx))
+      .resolves.toBeTruthy();
+  });
+```
+
+(`entryCountsBySeason` joins the FakeContext map list in task 1.3, and `Store.countDeleteImpact` already reads the same underlying count on the real store.)
+
+Add to the `workbox.globPatterns` in `vite.config.ts`: `'seasons/**/*.webp'` is already covered by the `webp` extension added in task 0.5 — assert it in the manifest test.
+
+Add to `docs/ops/SETUP.md`'s *New-season checklist*, as step 1: **commit `apps/client/public/seasons/<year>/field.webp`, run `pnpm season:images`, and redeploy the client — the season cannot be created until that image is live.**
+
+- [ ] **Step 5: Implement the rest**
 
 Each function follows the same five lines: `assertCan(caller, 'manage_events')` → parse the Zod input → check the invariant → write through `ctx.store` → return the row. `setActiveEvent` writes **both** `active_event_id` and `active_season_id` in one update, so the singleton can never hold a mismatched pair:
 
@@ -11427,19 +11604,19 @@ git add -A && git commit -m "feat(client): add the context landing page with a s
 
 ---
 
-## Task 1.23: The season game-image pipeline
+## Task 1.23: Rendering the season game image, and failing loudly without it
 
 **Files:**
-- Create: `apps/client/public/seasons/2026/field.webp` (the real image for the current season)
 - Create: `apps/client/src/season/images.ts`, `apps/client/src/season/images.test.ts`
 - Create: `apps/client/src/season/FieldImage.tsx`, `apps/client/src/season/FieldImage.test.tsx`
-- Create: `scripts/season-images.mjs`, `packages/shared/src/season/manifest.ts`
-- Modify: `apps/client/vite.config.ts` (precache `seasons/**/*.webp`), `apps/server/src/core/commands/seasons.ts` (validate against the manifest), `docs/ops/SETUP.md` (new-season checklist line)
+- Modify: `apps/client/vite.config.ts` (precache `seasons/**/*.webp`), `docs/ops/SETUP.md` (new-season checklist line)
+
+**Consumes:** `SEASON_IMAGE_MANIFEST` and the committed `.webp`, both from task 1.18.
 
 **Interfaces:**
-- Produces: `SEASON_IMAGE_MANIFEST` — the generated list of committed image paths, imported by both apps so the server can refuse a season whose image does not exist; `<FieldImage seasonId>` — renders the image or the **fail-loud** missing-image state.
+- Produces: `isKnownSeasonImage(path)`, `imageUrlFor(path)`; `<FieldImage path alt />` — renders the image, or the **fail-loud** missing-image state.
 
-**Rules (SPEC-FINAL §16.7).** No Supabase Storage and no binary uploads anywhere in v1. The image is a **static client asset** at `apps/client/public/seasons/<year>/field.webp`; the database stores **only the path string**. The service worker **precaches it with the app shell**, which is what makes offline position and cycle-path entry work at no cost to the offline budget. **Adding a season needs a commit and a redeploy** — a line in the new-season checklist. **The image is immutable once entries exist**: a new image means a **new filename and a new form version**. **A missing image must fail loudly** — an explicit error, never a blank canvas that quietly records meaningless coordinates.
+**Rules (SPEC-FINAL §16.7).** No Supabase Storage and no binary uploads anywhere in v1. The image is a **static client asset** at `apps/client/public/seasons/<year>/field.webp`; the database stores **only the path string**. The service worker **precaches it with the app shell**, which is what makes offline position and cycle-path entry work at no cost to the offline budget. **Adding a season needs a commit and a redeploy** — a line in the new-season checklist. **A missing image must fail loudly** — an explicit error, never a blank canvas that quietly records meaningless coordinates. (The *immutable once entries exist* half of §16.7 is enforced by `updateSeason`, task 1.18.)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -11505,80 +11682,6 @@ Expected: `Failed to resolve import "./images"`.
 
 - [ ] **Step 3: Implement**
 
-`scripts/season-images.mjs` walks `apps/client/public/seasons` and writes `packages/shared/src/season/manifest.ts`:
-
-```ts
-// GENERATED by `pnpm season:images`. Do not edit.
-export const SEASON_IMAGE_MANIFEST = ['seasons/2026/field.webp'] as const;
-export type SeasonImagePath = (typeof SEASON_IMAGE_MANIFEST)[number];
-```
-
-The script itself, in full:
-
-```js
-#!/usr/bin/env node
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join, relative } from 'node:path';
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const SEASONS_DIR = join(ROOT, 'apps/client/public/seasons');
-const TARGET = join(ROOT, 'packages/shared/src/season/manifest.ts');
-
-function walk(dir) {
-  return readdirSync(dir).flatMap((name) => {
-    const full = join(dir, name);
-    return statSync(full).isDirectory() ? walk(full) : [full];
-  });
-}
-
-function render() {
-  let files = [];
-  try {
-    files = walk(SEASONS_DIR)
-      .filter((f) => f.endsWith('.webp'))
-      .map((f) => relative(join(ROOT, 'apps/client/public'), f).split('\\').join('/'))
-      .sort();
-  } catch {
-    files = [];
-  }
-  const entries = files.map((f) => `  '${f}',`).join('\n');
-  return [
-    '// GENERATED by `pnpm season:images`. Do not edit.',
-    '// SPEC-FINAL 16.7: the database stores only the path string; this list is what',
-    '// makes the server able to refuse a season whose image is not committed.',
-    `export const SEASON_IMAGE_MANIFEST = [\n${entries}\n] as const;`,
-    '',
-    'export type SeasonImagePath = (typeof SEASON_IMAGE_MANIFEST)[number];',
-    '',
-  ].join('\n');
-}
-
-const rendered = render();
-if (process.argv.includes('--check')) {
-  const current = readFileSync(TARGET, 'utf8');
-  if (current !== rendered) {
-    console.error('drift: packages/shared/src/season/manifest.ts is stale.');
-    console.error('Run `pnpm season:images` and commit the result.');
-    process.exit(1);
-  }
-} else {
-  writeFileSync(TARGET, rendered, 'utf8');
-  console.warn(`wrote ${TARGET}`);
-}
-```
-
-Add to the root `package.json`: `"season:images": "node scripts/season-images.mjs"` and `"season:images:check": "node scripts/season-images.mjs --check"`.
-
-Add `export * from './season/manifest';` to `packages/shared/src/index.ts` — without it, `images.test.ts`'s `import { SEASON_IMAGE_MANIFEST } from '@frc/shared'` does not resolve.
-
-**Also modify `.github/workflows/ci.yml`** (add it to this task's Files list), inserting a step beside `env:example:check`:
-
-```yaml
-      - name: Season image manifest has not drifted
-        run: pnpm season:images:check
-```
-
 `apps/client/src/season/images.ts`:
 
 ```ts
@@ -11624,35 +11727,10 @@ export function FieldImage({
 }
 ```
 
-In `apps/server/src/core/commands/seasons.ts` (task 1.18), `createSeason` and `updateSeason` refuse a `field_image_path` that is not in `SEASON_IMAGE_MANIFEST`, with the message *"commit apps/client/public/<path> and redeploy the client first"*.
-
-**And `updateSeason` refuses to change `field_image_path` at all once the season has entries** (§16.7: *the image is immutable once entries exist* — every stored `{x, y}` is normalized against that exact image, so swapping it silently re-frames all historical spatial data). The message says what to do instead: *"a new image means a new filename and a new form version — create the new form version, do not swap the image."* Its test:
-
-```ts
-  it('refuses to swap a season image once entries exist, naming the alternative', async () => {
-    ctx.entryCountsBySeason.set('se-1', 40);
-    await expect(
-      updateSeason(admin, { season_id: 'se-1', field_image_path: 'seasons/2027/field.webp' }, ctx),
-    ).rejects.toThrow(/new form version/i);
-  });
-
-  it('still allows the game name to be corrected on a season with entries', async () => {
-    ctx.entryCountsBySeason.set('se-1', 40);
-    await expect(updateSeason(admin, { season_id: 'se-1', game_name: 'CRESCENDO' }, ctx))
-      .resolves.toBeTruthy();
-  });
-```
-
-(`entryCountsBySeason` joins the FakeContext map list in task 1.3, and `Store.countDeleteImpact` already reads the same underlying count on the real store.)
-
-Add to the `workbox.globPatterns` in `vite.config.ts`: `'seasons/**/*.webp'` is already covered by the `webp` extension added in task 0.5 — assert it in the manifest test.
-
-Add to `docs/ops/SETUP.md`'s *New-season checklist*, as step 1: **commit `apps/client/public/seasons/<year>/field.webp`, run `pnpm season:images`, and redeploy the client — the season cannot be created until that image is live.**
-
 - [ ] **Step 4: Run and watch pass**
 
 ```bash
-pnpm season:images && pnpm --filter @frc/client exec vitest run && pnpm --filter @frc/server exec vitest run && pnpm typecheck
+pnpm --filter @frc/client exec vitest run src/season && pnpm typecheck
 ```
 
 Expected: every suite green, including the new file(s) from this task in the client; the server's season tests now pass their image-path cases.
@@ -11767,7 +11845,7 @@ describe('validateEntryData over the whole catalogue', () => {
   it('ignores a computed field on input — its value is written by the engine, never typed');
   it('ignores a section entirely — it holds no data');
   it('accepts a multi select whose values are all in the option list, and rejects one that is not');
-}
+});
 ```
 
 each written out in full with a field definition and an assertion, mirroring the four existing cases.
@@ -12303,7 +12381,7 @@ git add -A && git commit -m "feat(shared): add conditional field visibility"
 
 **Files:**
 - Create: `apps/server/src/core/commands/forms.ts`, `apps/server/src/core/commands/forms.test.ts`
-- Modify: `apps/server/src/core/context.ts`, `apps/server/src/repos/store.ts`, `apps/server/src/routes/registry.ts`, `apps/server/src/test/fake-context.ts`
+- Modify: `apps/server/src/repos/store.ts`, `apps/server/src/routes/registry.ts`, `apps/server/src/test/fake-context.ts`
 
 **Interfaces:**
 - Produces: `createForm`, `updateForm` (the in-place edits), `saveDraftFields`, `publishFormVersion`, `restoreFormVersion`, `deleteFormVersion`, `deleteForm`, `importForm`, `exportForm`.
@@ -12464,7 +12542,7 @@ describe('form versioning (SPEC-FINAL 5.1)', () => {
       form_id: formId,
       timer_config: { phases: [{ phase: 'auto', seconds: 15 }, { phase: 'teleop', seconds: 135 }] },
     }, ctx);
-    expect(ctx.forms.get(formId)!.timer_config.phases).toHaveLength(2);
+    expect((ctx.forms.get(formId)!.timer_config as { phases: unknown[] }).phases).toHaveLength(2);
     expect(ctx.formVersions.size).toBe(1);
   });
 
@@ -12654,6 +12732,8 @@ git add -A && git commit -m "feat(server): add the scoring-model editor and the 
 
 **Files:**
 - Create: `apps/client/src/features/builder/BuilderPage.tsx`, `apps/client/src/features/builder/FieldPalette.tsx`, `apps/client/src/features/builder/BuilderCanvas.tsx`, `apps/client/src/features/builder/useBuilderState.ts`
+- Create: `packages/shared/src/forms/version.ts` — `isStructuralChange`, **moved** out of `apps/server/src/core/commands/forms.ts`
+- Modify: `apps/server/src/core/commands/forms.ts` (import it from `@frc/shared` instead of defining it), `packages/shared/src/index.ts`
 - Create: `apps/client/src/features/builder/BuilderPage.test.tsx`, `apps/client/src/features/builder/useBuilderState.test.ts`
 - Modify: `apps/client/src/routes.tsx`, `apps/client/package.json` (add `"@dnd-kit/core": "^6.1.0"`, `"@dnd-kit/sortable": "^9.0.0"`)
 
@@ -12882,7 +12962,9 @@ git add -A && git commit -m "feat(client): add the builder settings pane with me
 - Create: `apps/client/src/features/builder/LivePreview.test.tsx`, `apps/client/src/features/builder/RawJsonEditor.test.tsx`
 
 **Interfaces:**
-- Produces: a preview rendering the form **at phone width** with the real entry components (task 1.33's renderer, imported, not duplicated); an "advanced" raw-JSON editor that round-trips the definition and refuses invalid JSON with a line number; export to a `.json` file and import from one.
+- Produces: a preview rendering the form **at phone width** with the real `FieldInput` — imported, never duplicated; an "advanced" raw-JSON editor that round-trips the definition and refuses invalid JSON with a line number; export to a `.json` file and import from one.
+
+**Scope note.** At this point `FieldInput` still renders the four walking-skeleton types from task 1.7; task 1.33 widens it to all fourteen and the preview picks that up for free, because it imports the component rather than reimplementing it. This task's tests therefore use a four-type fixture form. Do not widen `FieldInput` here.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -13022,7 +13104,8 @@ This group replaces the walking skeleton's four-type entry screen with the real 
 ## Task 1.33: The entry renderer — every simple field type
 
 **Files:**
-- Modify: `apps/client/src/features/entry/FieldInput.tsx`, `apps/client/src/features/entry/FieldInput.test.tsx`
+- Modify: `apps/client/src/features/entry/FieldInput.tsx`
+- Create: `apps/client/src/features/entry/FieldInput.test.tsx`
 - Create: `apps/client/src/features/entry/inputs/NumberInput.tsx`, `RatingInput.tsx`, `MultiSelectInput.tsx`, `ShortTextInput.tsx`, `ComputedValue.tsx`, `SectionHeading.tsx`
 - Create: `apps/client/src/features/entry/useUndoable.ts`, `apps/client/src/features/entry/useUndoable.test.ts`
 
@@ -13360,7 +13443,7 @@ git add -A && git commit -m "feat(client): finish the entry form rules — phase
 **Files:**
 - Create: `apps/client/src/features/entry/practice.ts`, `apps/client/src/features/entry/practice.test.ts`
 - Create: `apps/client/src/features/entry/DraftRecovery.tsx`, `apps/client/src/features/entry/DraftRecovery.test.tsx`
-- Modify: `apps/client/src/features/entry/useDraft.ts`, `apps/client/src/features/shell/AppShell.tsx`
+- Modify: `apps/client/src/features/entry/useDraft.ts`, `apps/client/src/features/entry/submitEntry.ts` (become a no-op in practice mode), `apps/client/src/features/shell/AppShell.tsx`, `apps/client/src/routes.tsx` (the practice-mode entry point)
 
 **Interfaces:**
 - Produces: `practiceMode` — a session flag routing drafts to the `practice_drafts` store; `<DraftRecovery />` — the "you have an unfinished entry" offer on next open.
@@ -13817,7 +13900,7 @@ git add -A && git commit -m "feat(shared): implement the conflict policy as pure
 
 **Files:**
 - Modify: `apps/server/src/core/commands/syncPush.ts`, `apps/server/src/core/commands/syncPush.test.ts`
-- Modify: `apps/server/src/core/context.ts` (add `findByLogicalKey`, `insertConflict`, `parentsExist`), `apps/server/src/repos/store.ts`, `apps/server/src/test/fake-context.ts`
+- Modify: `apps/server/src/repos/store.ts` and `apps/server/src/test/fake-context.ts` (replace the `findByLogicalKey`, `parentsExist` and `insertConflict` stubs — all three are already declared by task 1.3)
 
 **Interfaces:**
 - Produces: `syncPush` returning `divergence`, `duplicate` and `rejected: parent-deleted`, and writing the matching `sync_conflicts` rows.
@@ -13916,7 +13999,9 @@ git add -A && git commit -m "feat(shared): implement the conflict policy as pure
 
 - [ ] **Step 2: Implement**
 
-`applyEntry` becomes: parent check → authorization → duplicate lookup → `classifyPush` → write the live row → write the conflict row when the decision is not fast-forward → `markApplied` → return the matching `PushResult`.
+`applyEntry` becomes: parent check → **the task 1.14 authorization block, unchanged** → duplicate lookup → `classifyPush` → write the live row → write the conflict row when the decision is not fast-forward → `markApplied` → return the matching `PushResult`.
+
+> **Keep 1.14's guard.** The fragment below starts at the parent check and says nothing about ownership or the five-minute window. That is because **neither changes** — the `scouter`-role ownership check and the `withinSelfEditWindow` / `edit-window-expired` branch stay exactly where task 1.14 put them, between the parent check and the duplicate lookup. If 1.14's five tests go red while you are doing this task, you deleted them. Put them back.
 
 ```ts
   if (!(await ctx.store.parentsExist({
@@ -13932,7 +14017,14 @@ git add -A && git commit -m "feat(shared): implement the conflict policy as pure
       ? await ctx.store.findByLogicalKey(logicalKeyOf(payload as LogicalRow))
       : null;
 
-  const decision = classifyPush({ operation: op, existingRow: existing, duplicateRow: duplicate });
+  // Both rows come back as StoredRow, which promises only { id, version }. An entry row
+  // always carries client_updated_at and deleted_at as well; asserting it here is
+  // narrower and more honest than widening StoredRow for every table in the schema.
+  const decision = classifyPush({
+    operation: op,
+    existingRow: existing as ExistingRow | null,
+    duplicateRow: duplicate as ExistingRow | null,
+  });
 
   await ctx.store.putRow('scouting_entry', op.row_id, {
     ...decision.live,
@@ -14909,7 +15001,7 @@ git add -A && git commit -m "feat(client): add the lead-approved device wipe, re
 
 **Files:**
 - Create: `apps/server/src/core/queries/search.ts`, `apps/server/src/core/queries/search.test.ts`
-- Modify: `apps/server/src/routes/registry.ts`, `apps/server/src/repos/store.ts`
+- Modify: `apps/server/src/routes/registry.ts`, `apps/server/src/repos/store.ts`, `apps/server/src/test/fake-context.ts` (implement `seedSmallSeason` and `softDelete`, and the four query stubs)
 
 **Interfaces:**
 - Produces: `searchTeams`, `listTeamEvents`, `queryEntries`, `getEntry` — all bounded and paginated, all callable by every role and by a `service` caller.
@@ -15678,7 +15770,7 @@ git add -A && git commit -m "feat(shared): add cycle derivation, reliability cou
 
 **Files:**
 - Create: `apps/server/src/core/queries/stats.ts`, `apps/server/src/core/queries/stats.test.ts`
-- Modify: `apps/server/src/routes/registry.ts`, `apps/server/src/repos/store.ts`
+- Modify: `apps/server/src/routes/registry.ts`, `apps/server/src/repos/store.ts`, `apps/server/src/test/fake-context.ts` (implement `seedRankingFixture`, `duplicateEntry` and `changeFieldTypeBetweenVersions`)
 
 **Interfaces:**
 - Produces: `getTeamStats(caller, { team_id, scope })` — all metrics for one team over a scope, plus the **match-by-match series** and its **notes**; `rankTeams(caller, { event_id })` — the **fixed** phase 1 ranking table.
@@ -15819,6 +15911,7 @@ git add -A && git commit -m "feat: add value shading and the per-match progressi
 **Files:**
 - Create: `apps/server/src/core/commands/deletes.ts`, `apps/server/src/core/commands/deletes.test.ts`
 - Create: `apps/server/src/core/queries/deleteImpact.ts`
+- Create: `packages/db/test/deletes.itest.ts` — the ON DELETE RESTRICT ordering, against the real dev database
 - Modify: `apps/server/src/routes/registry.ts`, `apps/server/src/repos/store.ts`
 
 **Interfaces:**
