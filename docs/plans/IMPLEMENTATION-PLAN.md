@@ -10227,6 +10227,46 @@ In `apps/client/src/data/api.ts`, replace the `TokenSource` default with `sessio
     if (refreshed) await session.replaceToken(refreshed);
 ```
 
+`apps/client/src/data/rpc.ts` — the client for every registry route. `api.ts` (task 1.6) stays as it is: it owns `/sync/push` and `/sync/pull`, which are not registry routes.
+
+```ts
+import { clientConfig } from '@/config';
+import { session } from '@/auth/session';
+
+export type Rpc = { call: (name: string, input?: unknown) => Promise<unknown> };
+
+export class RpcError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = 'RpcError';
+  }
+}
+
+/** One POST per registry entry; the typed client is derived from the registry itself. */
+export const rpc: Rpc = {
+  async call(name: string, input: unknown = {}): Promise<unknown> {
+    const token = await session.token();
+    const res = await fetch(`${clientConfig().apiBaseUrl}/api/${name}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(input),
+    });
+    const refreshed = res.headers.get('x-refreshed-token');
+    if (refreshed) await session.replaceToken(refreshed);
+
+    const body: unknown = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const error = (body as { error?: { code?: string; message?: string } }).error;
+      throw new RpcError(error?.code ?? 'invalid', error?.message ?? 'that did not work');
+    }
+    return body;
+  },
+};
+```
+
 `apps/client/src/auth/LoginPage.tsx` — a single centred card: a `username` input (`autoComplete="username"`), a `password` input (`autoComplete="current-password"`), one full-width 48 px submit button, and one error line. It calls `POST /api/login` through the API client, then `session.signIn(user, token)`, then navigates to `/` — or to `/change-password` when `must_change_password` is true. It shows no "forgot password" link, because there is no self-service reset (§7.3); it says instead: *"Ask an admin to reset it."*
 
 `apps/client/src/auth/ChangePasswordPage.tsx` — current password, new password, confirm; calls `changeOwnPassword`; refuses fewer than 8 characters client-side with the same message the server uses.
@@ -11104,8 +11144,9 @@ git add -A && git commit -m "feat(server): add team, roster and match management
 **Files:**
 - Create: `apps/client/src/features/admin/ManagePage.tsx`, `apps/client/src/features/admin/SeasonsPanel.tsx`, `apps/client/src/features/admin/EventsPanel.tsx`
 - Create: `apps/client/src/features/admin/SeasonsPanel.test.tsx`, `apps/client/src/features/admin/EventsPanel.test.tsx`
-- Create: `apps/client/src/data/rpc.ts`
 - Modify: `apps/client/src/routes.tsx`
+
+**`apps/client/src/data/rpc.ts` already exists** — task 1.15 created it for the login and change-password screens. This task only uses it.
 
 **Interfaces:**
 - Produces: `rpc.call('createSeason', input)` — the typed client derived from the registry; `<ManagePage />` at `/admin/manage`, desktop-only, with tabs *Seasons · Events · Teams & roster · Matches* (the last two land in task 1.21).
@@ -11254,55 +11295,13 @@ pnpm --filter @frc/client exec vitest run src/features/admin
 
 Expected: `Failed to resolve import "./SeasonsPanel"`.
 
-- [ ] **Step 3: Implement the typed RPC client**
-
-`apps/client/src/data/rpc.ts`:
-
-```ts
-import { clientConfig } from '@/config';
-import { session } from '@/auth/session';
-
-export type Rpc = { call: (name: string, input?: unknown) => Promise<unknown> };
-
-export class RpcError extends Error {
-  constructor(readonly code: string, message: string) {
-    super(message);
-    this.name = 'RpcError';
-  }
-}
-
-/** One POST per registry entry; the typed client is derived from the registry itself. */
-export const rpc: Rpc = {
-  async call(name: string, input: unknown = {}): Promise<unknown> {
-    const token = await session.token();
-    const res = await fetch(`${clientConfig().apiBaseUrl}/api/${name}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(input),
-    });
-    const refreshed = res.headers.get('x-refreshed-token');
-    if (refreshed) await session.replaceToken(refreshed);
-
-    const body: unknown = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const error = (body as { error?: { code?: string; message?: string } }).error;
-      throw new RpcError(error?.code ?? 'invalid', error?.message ?? 'that did not work');
-    }
-    return body;
-  },
-};
-```
-
-- [ ] **Step 4: Implement the two panels**
+- [ ] **Step 3: Implement the two panels**
 
 `SeasonsPanel` renders a table (year, game name, image path, active marker, actions), a "New season" form with three labelled inputs, and one `role="alert"` line that shows **the server's message**, never its code. `EventsPanel` renders the events of a season ordered by `sort_order`, with up/down buttons that send the whole `event_ids` array to `reorderEvents`, a "make the default" action per row, and a permanent note: *"Reordering changes display order only. It never re-weights aggregates — every event counts equally."*
 
 `ManagePage` wraps both in `<DesktopOnly what="season, event, roster and match management">` and a tab strip.
 
-- [ ] **Step 5: Run and watch pass**
+- [ ] **Step 4: Run and watch pass**
 
 ```bash
 pnpm --filter @frc/client exec vitest run && pnpm typecheck && pnpm lint
@@ -11310,7 +11309,7 @@ pnpm --filter @frc/client exec vitest run && pnpm typecheck && pnpm lint
 
 Expected: every suite green, including the new file(s) from this task.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add -A && git commit -m "feat(client): add the admin management page for seasons and events"
