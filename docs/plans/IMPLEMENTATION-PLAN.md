@@ -8169,7 +8169,7 @@ git add -A && git commit -m "feat(client): add the skeleton entry screen with dr
 
 **Files:**
 - Create: `apps/client/src/routes.tsx`, `apps/client/src/features/shell/AppShell.tsx`, `apps/client/src/features/shell/ConnectionIndicator.tsx`, `apps/client/src/features/shell/ConnectionIndicator.test.tsx`
-- Create: `apps/client/src/features/entry/SelectRobotPage.tsx`, `apps/client/src/features/entry/EntryRoute.tsx`
+- Create: `apps/client/src/features/entry/SelectRobotPage.tsx`, `apps/client/src/features/entry/SelectRobotPage.test.tsx`, `apps/client/src/features/entry/EntryRoute.tsx`
 - Create: `apps/client/src/features/entries/EntriesPage.tsx`, `apps/client/src/features/entries/EntriesPage.test.tsx`
 - Modify: `apps/client/src/App.tsx`, `apps/client/package.json` (add `"react-router-dom": "^7.0.1"`, `"@tanstack/react-query": "^5.59.20"`)
 
@@ -8514,7 +8514,158 @@ export function AppShell({ eventId }: { eventId: string }) {
 }
 ```
 
-`apps/client/src/features/entry/SelectRobotPage.tsx` — the manual selection of SPEC-FINAL §8.1, in the skeleton's simplest form: a match select (from cached `matches`), a red/blue toggle, and a team select filtered to that match's `match_teams` for the chosen alliance, falling back to the whole roster when the slots are empty. It navigates to `/entry/:matchId/:teamId`. It reads only from `cachedRows` and holds no state beyond the three selections.
+`apps/client/src/features/entry/SelectRobotPage.tsx` — the manual selection of SPEC-FINAL §8.1: a match picker, a red/blue toggle, and a team select filtered to that match's `match_teams` for the chosen alliance, falling back to the whole roster when the slots are empty. It navigates to `/entry/:matchId/:teamId`.
+
+**It also carries the client half of bare-match auto-creation (§6.4).** Without it a scouter at a venue with an incomplete schedule cannot record a match at all, which is the exact failure §6.4 exists to prevent. So the match picker is a **number input plus a type select**, never a dropdown of known matches: if the number is already known the page uses that match, and **if it is not, the page creates it** — offline, through the outbox, like any other create.
+
+```tsx
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { formatCount } from '@frc/shared';
+import { cachedRows } from '@/data/cache';
+import { db } from '@/data/db';
+import { enqueue, nextSeq } from '@/data/outbox';
+
+type MatchRow = { id: string; event_id: string; match_type: string; number: number };
+type TeamRow = { id: string; number: number; name: string };
+type SlotRow = { match_id: string; alliance: 'red' | 'blue'; team_id: string };
+type RosterRow = { event_id: string; team_id: string; deleted_at: string | null };
+
+export function SelectRobotPage({ eventId, authorUserId }: { eventId: string; authorUserId: string }) {
+  const navigate = useNavigate();
+  const [matches, setMatches] = useState<MatchRow[]>([]);
+  const [slots, setSlots] = useState<SlotRow[]>([]);
+  const [roster, setRoster] = useState<TeamRow[]>([]);
+  const [matchType, setMatchType] = useState('qualification');
+  const [number, setNumber] = useState('');
+  const [alliance, setAlliance] = useState<'red' | 'blue' | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      setMatches((await cachedRows<MatchRow>('matches')).filter((m) => m.event_id === eventId));
+      setSlots(await cachedRows<SlotRow>('match_teams'));
+      const teamById = new Map((await cachedRows<TeamRow>('teams')).map((t) => [t.id, t]));
+      const live = (await cachedRows<RosterRow>('event_teams')).filter(
+        (r) => r.event_id === eventId && r.deleted_at == null,
+      );
+      setRoster(live.map((r) => teamById.get(r.team_id)).filter((t): t is TeamRow => Boolean(t)));
+    })();
+  }, [eventId]);
+
+  const parsed = Number(number);
+  const existing = matches.find((m) => m.match_type === matchType && m.number === parsed);
+  const listed = existing
+    ? slots.filter((s) => s.match_id === existing.id && s.alliance === alliance).map((s) => s.team_id)
+    : [];
+  const choices = listed.length > 0 ? roster.filter((t) => listed.includes(t.id)) : roster;
+
+  /**
+   * SPEC-FINAL 6.4: a system action, not an admin capability. It creates the minimal row
+   * — event, type, number, nothing else — rides the outbox, and works offline.
+   */
+  async function ensureMatchLocally(): Promise<string> {
+    if (existing) return existing.id;
+    const rowId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const payload = { id: rowId, event_id: eventId, match_type: matchType, number: parsed };
+    await enqueue({
+      op_id: crypto.randomUUID(),
+      entity: 'match',
+      row_id: rowId,
+      action: 'create',
+      base_version: null,
+      payload,
+      author_user_id: authorUserId,
+      client_created_at: now,
+      client_updated_at: now,
+      seq: await nextSeq(),
+    });
+    // Optimistic local write, so the picker and the entry screen see it at once.
+    await db.rows.put({ ...payload, entity: 'matches', version: 1, updated_at: now });
+    setMatches((current) => [...current, payload]);
+    return rowId;
+  }
+
+  return (
+    <main className="mx-auto max-w-xl p-4">
+      <label className="block py-2">
+        <span className="text-sm font-medium">Match type</span>
+        <select
+          className="tap-target mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)]"
+          value={matchType}
+          onChange={(e) => setMatchType(e.target.value)}
+        >
+          <option value="qualification">Qualification</option>
+          <option value="practice">Practice</option>
+          <option value="playoff">Playoff</option>
+        </select>
+      </label>
+
+      <label className="block py-2">
+        <span className="text-sm font-medium">Match number</span>
+        <input
+          type="number"
+          min={1}
+          inputMode="numeric"
+          className="tap-target mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2"
+          value={number}
+          onChange={(e) => setNumber(e.target.value)}
+        />
+      </label>
+
+      {parsed > 0 && !existing && (
+        <p role="status" className="rounded-lg border border-[var(--border)] p-2 text-sm">
+          Match {formatCount(parsed)} is not on this device yet. It will be created when you
+          submit — keep scouting.
+        </p>
+      )}
+
+      <fieldset role="group" aria-label="Alliance" className="py-2">
+        <legend className="text-sm font-medium">Alliance</legend>
+        <div className="tap-row mt-1 flex">
+          {(['red', 'blue'] as const).map((side) => (
+            <label
+              key={side}
+              className="tap-target flex flex-1 items-center justify-center gap-2 rounded-lg border border-[var(--border)]"
+            >
+              <input
+                type="radio"
+                name="alliance"
+                aria-label={side}
+                checked={alliance === side}
+                onChange={() => setAlliance(side)}
+              />
+              <span className="capitalize">{side}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      <fieldset className="py-2" disabled={alliance === null || parsed <= 0}>
+        <legend className="text-sm font-medium">Robot</legend>
+        <div className="mt-1 grid gap-2">
+          {choices.map((team) => (
+            <button
+              key={team.id}
+              type="button"
+              className="tap-target rounded-lg border border-[var(--border)] px-3 text-left"
+              onClick={() => {
+                void ensureMatchLocally().then((matchId) => navigate(`/entry/${matchId}/${team.id}`));
+              }}
+            >
+              <span dir="auto">
+                {formatCount(team.number)} {team.name}
+              </span>
+            </button>
+          ))}
+        </div>
+      </fieldset>
+    </main>
+  );
+}
+```
+
+`apps/client/src/features/entry/SelectRobotPage.test.tsx` asserts: the roster lists once an alliance is chosen; a **known** match number navigates and enqueues nothing; an **unknown** one shows the `role="status"` notice and, on choosing a robot, enqueues exactly one `entity: 'match'` create whose payload holds only `event_id`, `match_type` and `number` — plus a `matches` row in the local dataset; the same unknown number chosen twice yields **one** match, not two; the team list narrows to that match's `match_teams` when the slots are filled and falls back to the whole roster when they are not; and the whole flow works with `navigator.onLine` false.
 
 `apps/client/src/routes.tsx`:
 
@@ -10229,6 +10380,23 @@ In `apps/client/src/data/api.ts`, replace the `TokenSource` default with `sessio
 
 `apps/client/src/data/rpc.ts` — the client for every registry route. `api.ts` (task 1.6) stays as it is: it owns `/sync/push` and `/sync/pull`, which are not registry routes.
 
+**This task also creates `packages/shared/src/api/index.ts`**, the shared schema map §16.1 requires — *"the Zod schemas in `packages/shared` are the single validation source for both sides"*:
+
+```ts
+import { z } from 'zod';
+import { loginInput, loginOutput } from './schemas/auth';
+// ...one import per use case; each use-case module re-exports its two schemas from here
+
+export const API = {
+  login: { input: loginInput, output: loginOutput },
+  refreshToken: { input: refreshTokenInput, output: loginOutput },
+} as const;
+
+export type Api = typeof API;
+```
+
+The server's `REGISTRY` imports its `input`/`output` from this same map rather than declaring them again, so the two sides cannot drift. **Every task that adds a use case adds its row here as well** — that is what makes `rpc.call('createSeason', …)` typed at every call site instead of `Promise<unknown>`.
+
 ```ts
 import { clientConfig } from '@/config';
 import { session } from '@/auth/session';
@@ -10242,7 +10410,22 @@ export class RpcError extends Error {
   }
 }
 
-/** One POST per registry entry; the typed client is derived from the registry itself. */
+/**
+ * SPEC-FINAL 16.1: "the typed client is derived from the use-case registry itself" — this
+ * is why there is no tRPC. `API` is the map of use-case name to its Zod input and output,
+ * exported from packages/shared, so a renamed field is a compile error in the page that
+ * reads it rather than `undefined` at a venue.
+ */
+export async function call<K extends keyof Api>(
+  name: K,
+  input: z.input<Api[K]['input']>,
+): Promise<z.output<Api[K]['output']>> {
+  const parsed = API[name].input.parse(input);
+  const body = await post(String(name), parsed);
+  return API[name].output.parse(body);
+}
+
+/** The untyped escape hatch, for the two unauthenticated routes and for tests. */
 export const rpc: Rpc = {
   async call(name: string, input: unknown = {}): Promise<unknown> {
     const token = await session.token();
@@ -10464,7 +10647,7 @@ git add -A && git commit -m "feat(client): add offline login against cached hash
 **Files:**
 - Create: `apps/client/src/features/admin/UsersPage.tsx`, `apps/client/src/features/admin/UserDetailPage.tsx`, `apps/client/src/features/admin/UsersPage.test.tsx`
 - Create: `apps/client/src/components/DesktopOnly.tsx`, `apps/client/src/components/DesktopOnly.test.tsx`
-- Create: `apps/client/src/components/StateMessage.tsx`
+- Create: `apps/client/src/components/StateMessage.tsx`, `apps/client/src/components/Skeleton.tsx`, `apps/client/src/components/Skeleton.test.tsx`
 - Create: `apps/client/src/components/ConfirmDialog.tsx`
 - Modify: `apps/client/src/routes.tsx`
 
@@ -10550,6 +10733,8 @@ export function DesktopOnly({ what, children }: { what: string; children: ReactN
   );
 }
 ```
+
+`apps/client/src/components/Skeleton.tsx` — **skeletons, not spinners** (§17.8). Lists and tables render a `<Skeleton rows={n} />` of grey bars at the row height they are about to fill, so the page does not jump when the data lands. A spinner is permitted **only** for a genuinely indeterminate single action (a submit in flight), never for a list. Its test asserts: `role="status"` with `aria-busy`, the requested number of bars, no `animate-spin` anywhere in the component, and that it respects `prefers-reduced-motion` by dropping the shimmer rather than the layout.
 
 `apps/client/src/components/StateMessage.tsx` — one component, six variants (`no-data`, `form-not-published`, `offline-needs-server`, `failed`, `no-results`, `conflicts-waiting`), each a centred glyph, one bold line of what happened, one muted line of why, and **exactly one primary action**. The `offline-needs-server` variant's muted line always says **the data is safe on the device** — that is the sentence that stops someone re-entering a match. No raw error codes are ever rendered.
 
@@ -11586,6 +11771,35 @@ export function entryCreationAllowed(): boolean {
 `ContextPage` reads the cached `app_settings`, `seasons` and `events`, renders the default as a "current" card, then a grid of season cards (most recent first) each expanding to its events in `sort_order`. Every non-default card is `disabled` while `!navigator.onLine`, with the muted line *"Only the default competition is available offline."* Choosing one calls `sessionOverride.set` and renders a `role="status"` banner: *"You are looking at Week 3 only for this session. You cannot create new entries here, and reopening the app returns to Week 1."* The footer prints `version {clientConfig().appVersion}`.
 
 `AppShell` subscribes to `sessionOverride` and disables the "Scout" nav entry while one is active.
+
+**Three more things `AppShell` owns, each one line of SPEC-FINAL that has nowhere else to live:**
+
+```tsx
+// 9.1 — a new version NEVER auto-reloads. It activates on the next cold start; all we
+// do is say so, quietly, and let the scouter finish the match.
+const [updateReady, setUpdateReady] = useState(false);
+useEffect(() => {
+  void registerServiceWorker(() => setUpdateReady(true), browserAdapter());
+}, []);
+
+// 9.3 — a delta pull runs on app open, SCREEN ENTRY, pull-to-refresh, manual refresh,
+// reconnect, and the 45-second auto-refresh. Screen entry and pull-to-refresh are the
+// two that are easy to forget, and 10 calls needing a restart to see a change a caching
+// bug to design out.
+const { pathname } = useLocation();
+useEffect(() => {
+  if (navigator.onLine) void run(false);
+}, [pathname]);
+
+// 9.3 — if the server says the event is gone, the cache is wiped and the notice NAMES it.
+if (outcome.status === 'event-gone') {
+  setGoneNotice(`${eventName} no longer exists. Its data has been removed from this device.`);
+}
+```
+
+The update hint renders as one muted line in the footer — *"An update is ready. It will apply next time you open the app."* — with **no reload button**, because there is nothing safe for that button to do mid-match. Pull-to-refresh is a `touchstart`/`touchmove` handler on the scroll container that calls the same `run(false)`; there is exactly one sync path and everything routes through it.
+
+`AppShell.test.tsx` asserts each: the hint appears when `registerServiceWorker` reports an update and there is no control that reloads; navigating between two routes triggers a pull; a pull-to-refresh gesture triggers one; and `event-gone` renders a notice containing the event's name and empties `db.rows` for it.
 
 - [ ] **Step 4: Run and watch pass**
 
@@ -13179,6 +13393,8 @@ This group replaces the walking skeleton's four-type entry screen with the real 
 **Interfaces:**
 - Produces: `FieldInput` covering `counter · number · toggle · single_select · multi_select · rating · short_text · long_text · computed · section`; `useUndoable(value, onChange)` — the undo stack behind **every repeatable input**.
 
+**§8.2 names five repeatable inputs, not three.** Counters, event-log taps and position points are the obvious ones; **multi-select** and **timer reset** are the two usually forgotten. A multi-select's undo pops the last option toggled — not a clear-all — and the timer's reset is undoable back to the accumulated value it had before, so a mis-tap during a match is recoverable. Both go through the same `useUndoable`, and `FieldInput.test.tsx` carries a case for each.
+
 **Rules.** Counters stay a wide **− / value / +** triplet and never a text input. Ratings render as **1–5 stars or a slider** per `config.style`. A computed field is **read-only** and recomputed as the scouter types (§5.7). A section renders as a heading and holds no value. Every target is **≥ 48 × 48 px with ≥ 8 px between adjacent targets**, and every label and free-text field carries `dir="auto"`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -13427,7 +13643,7 @@ export const matchClock = {
 };
 ```
 
-`TimerInput` is an accumulating stopwatch with start/stop, a **number input enabled once stopped** so a late stop can be corrected, and an "unsure — no time" checkbox that clears the value and submits nothing rather than a wrong number.
+`TimerInput` is an accumulating stopwatch with start/stop, a **number input enabled once stopped** so a late stop can be corrected, and an "unsure — no time" checkbox that clears the value and submits nothing rather than a wrong number. **Its reset is undoable** (§8.2) — `useUndoable` restores the accumulated value, because resetting a timer by accident two minutes into a match is otherwise unrecoverable.
 
 - [ ] **Step 3: Run and commit**
 
@@ -13541,8 +13757,9 @@ git add -A && git commit -m "feat: add the position picker and cycle path with a
 ## Task 1.36: The entry form's rules — phases, status, conditions, range block, confirmation
 
 **Files:**
-- Modify: `apps/client/src/features/entry/EntryPage.tsx`, `apps/client/src/features/entry/EntryPage.test.tsx`
+- Modify: `apps/client/src/features/entry/EntryPage.tsx`, `apps/client/src/features/entry/EntryPage.test.tsx`, `apps/client/src/routes.tsx`
 - Create: `apps/client/src/features/entry/PhaseSection.tsx`, `apps/client/src/features/entry/ConfirmSummary.tsx`
+- Create: `apps/client/src/features/entry/SuperEntryPage.tsx`, `apps/client/src/features/entry/SuperEntryPage.test.tsx`
 
 **Interfaces:**
 - Produces: the finished entry screen — collapsible phase sections a scouter can **open, close and reopen at will** (not one-way paging), the mandatory robot status **before** the scoring fields, conditional fields per §5.8, the hard range block on submit, and the confirmation summary of the whole entry.
@@ -13653,6 +13870,34 @@ git add -A && git commit -m "feat: add the position picker and cycle path with a
 
 
 - [ ] **Step 2: Implement**
+
+**The super-scouting entry point (SPEC-FINAL §8.1).** A second, separate route at `/super`, because a super record is one per **(team, event)**, not per match. It asks for three things and no more:
+
+1. the active season's `super` form, resolved by `kind` — never chosen by the scouter;
+2. the **team**, from the event roster;
+3. **no match, no alliance, no robot status.** `validateEntryShape` enforces all four nulls on both sides.
+
+```tsx
+/**
+ * SPEC-FINAL 8.1: if a super entry for that (team, event) already exists ON THIS DEVICE,
+ * open it for editing rather than starting a second one. The duplicate path of 9.5 is for
+ * the case this device cannot see — two devices, both offline — not for this one.
+ */
+async function openOrCreate(eventId: string, teamId: string) {
+  const existing = (await cachedRows('scouting_entries')).find(
+    (e) =>
+      e.event_id === eventId &&
+      e.form_kind === 'super' &&
+      e.team_id === teamId &&
+      e.deleted_at == null,
+  );
+  return existing ? { rowId: String(existing.id), data: existing.data as Record<string, unknown> } : null;
+}
+```
+
+It renders the same `PhaseSection` / `FieldInput` stack as the match form — a super form's fields carry `phase` metadata like any other — and submits through the same `submitEntry` with `formKind: 'super'`, `matchId: null`, `alliance: null`, `robotStatus: null`, and `rowId` set when it is editing.
+
+`SuperEntryPage.test.tsx` asserts: the team picker lists the event roster; **no** match, alliance or robot-status control renders anywhere on the page; submitting enqueues one operation carrying `form_kind: 'super'` with all four of those null; opening a team that already has a super entry on this device **loads its values and updates that row** rather than creating a second; and the confirmation summary names the team and the event but no match.
 
 `EntryPage` composes: `RobotStatusPicker` → (breakdown seconds) → `MatchTimer` (when `timer_config.phases` is non-empty) → `PhaseSection` per phase, each rendering `visibleFields(fieldsInPhase, data)` → the sticky "Review entry" bar → `ConfirmSummary`. Computed fields are evaluated on every change with `evaluateExpr` and written into `data` so they reach the payload (§5.7). Hidden fields are stripped from `data` before validation and submit, because **a hidden field records no value**.
 
@@ -16019,6 +16264,18 @@ describe('scoreEntry', () => {
     expect(scoreEntry({ robot_status: 'played', data: { notes: 'long note' } } as never, fields, rules)).toBe(0);
   });
 
+  it('recomputes a computed field at read time, so an expression fix repairs history', () => {
+    const computed = field('total', 'computed');
+    computed.config = {
+      result_type: 'float',
+      expression: { kind: 'op', op: '*', left: { kind: 'field', key: 'auto' }, right: { kind: 'literal', value: 2 } },
+    };
+    // the stored payload carries a STALE value from an older expression
+    const entry = { robot_status: 'played', data: { auto: 3, total: 999 } } as never;
+    const hydrated = hydrateComputed(entry.data, [field('auto', 'counter'), computed]);
+    expect(hydrated.total).toBe(6);
+  });
+
   it('re-scores immediately when the model changes, because nothing is stored', () => {
     const entry = { robot_status: 'played', data: { auto: 3 } } as never;
     expect(scoreEntry(entry, fields, [rule('auto', 5)])).toBe(15);
@@ -16184,6 +16441,25 @@ export function scoreField(field: FormFieldDefinition, rule: ScoringRule | undef
 }
 
 /**
+ * SPEC-FINAL 5.7: a Computed field's value is written into the entry's data payload at
+ * submit time AND RECOMPUTED BY THE ENGINE WHENEVER THE ENTRY IS READ, so correcting an
+ * expression repairs history. Every read path — scoreEntry, getEntry, queryEntries,
+ * getTeamStats — goes through this first.
+ */
+export function hydrateComputed(
+  data: Record<string, unknown>,
+  fields: FormFieldDefinition[],
+): Record<string, unknown> {
+  const out = { ...data };
+  for (const field of fields) {
+    if (field.type !== 'computed') continue;
+    const expr = field.config.expression as Expr | null | undefined;
+    out[field.key] = expr ? evaluateExpr(expr, out) : null;
+  }
+  return out;
+}
+
+/**
  * A robot's scouted score is the sum of its field points (SPEC-FINAL 4.1). A no-show or
  * disabled robot has no score at all — null, never zero (11.3).
  */
@@ -16194,7 +16470,9 @@ export function scoreEntry(
 ): number | null {
   if (entry.robot_status === 'no_show' || entry.robot_status === 'disabled') return null;
   const byKey = new Map(rules.map((r) => [r.field_key, r]));
-  return fields.reduce((total, field) => total + scoreField(field, byKey.get(field.key), entry.data[field.key]), 0);
+  // Computed fields are re-derived here, never trusted from the stored payload (5.7).
+  const data = hydrateComputed(entry.data, fields);
+  return fields.reduce((total, field) => total + scoreField(field, byKey.get(field.key), data[field.key]), 0);
 }
 ```
 
@@ -17240,6 +17518,7 @@ git add -A && git commit -m "test: grow the smoke suite to the full client-serve
 12. From a second device, send those entries by QR; scan them on the first. → "batch complete", and the entries appear in the receiver's list; **the sender's outbox is still 10 pending**.
 13. Disable airplane mode. → Within a few seconds the indicator reads `online` with no count, and the sync page shows a fresh successful sync.
 14. On a laptop, open the ranking table. → The 10 entries are there and the numbers match what was entered.
+15. **Measure the two §18.1 targets while you are there.** Tap a counter with the phone's dev tools open: the value must change in **under 100 ms** — it is a local state update, so anything slower is a re-render bug, not a network one. Then submit an entry with the network on and watch the sync page: the entry must reach the server **within 2 seconds** of connectivity. Record both numbers in the results log; a regression here is invisible until it is infuriating.
 
 Any step that fails is a release blocker. Record the date, the device and the result at the bottom of the file each time it is run.
 
@@ -17543,33 +17822,26 @@ Why this is tolerable: the tests assert on roles, labels, copy and behaviour, so
 
 **If you want them closed**, the cheapest route is one planning chat per group (C, D, E, H) that expands only those tasks, using the finished ones — 1.7, 1.8, 1.23, 1.33 — as the house style. That is four chats, and it can happen while phase 0 is being built.
 
-### 2. Two features are named but their entry point is only sketched
+### 2. Everything else in this appendix is closed
 
-- **Super-scouting entry (§8.1).** The data model, the duplicate rule, the validator, the seed form and the entry-search kind filter are all built. What is specified only in prose is the **separate entry point**: pick the season's `super` form by kind, pick a team from the roster, no match, no alliance, no robot status, and *open the existing entry for editing* if this device already holds one for that (team, event). It belongs in task **1.36**, and it is about one screen's worth of work.
-- **Bare match auto-creation, client half (§6.4).** The server half is complete — `ensureMatch`, the `match` outbox entity, the offline flag. The client half is one control on `SelectRobotPage`: *"that match number isn't listed — create it"*, which enqueues an `entity: 'match'` create and continues. It belongs in task **1.8**. Without it a scouter at a venue with an incomplete schedule cannot record a match at all, which is precisely the failure §6.4 exists to prevent, so **do not let this one slip**.
+The three sections that used to sit here — the two sketched entry points, the eight loose §17 details, and the half-built typed client — have been written out. They are listed here so the record of what was closed, and when, is not lost:
 
-### 3. Smaller §17 details that no task currently owns
-
-Each is a line or two of work; they are listed so they can be swept into the nearest task rather than discovered at an event.
-
-**Stated in a task, but with no test to hold it:** the two-column entry form at tablet width (§8.6, §17.3 — task 1.38's Rules block says it), the sync page's list of what **did** sync (§9.10 — task 1.43's Interfaces line says it), and what "all metrics for the team" means in phase 1 (§13.1 — task 1.57's Interfaces line says it). Each needs a case, not a new home.
-
-**Owned by no task at all:**
-
-| Detail | SPEC-FINAL | Suggested home |
+| Was | Now | Where |
 |---|---|---|
-| Skeletons, not spinners, for lists and tables | §17.8 | 1.17, beside `StateMessage` |
-| The "update ready" hint actually rendered | §9.1 | 1.8, in `AppShell` |
-| Practice mode's entry point (a route or a toggle) | §8.5 | 1.37 |
-| Undo on multi-select and on timer reset | §8.2 | 1.33, 1.34 |
-| Delta pull on screen entry and on pull-to-refresh | §9.3, §10 | 1.8 |
-| The "this event no longer exists" notice | §9.3 | 1.8 |
-| Computed fields recomputed **at read time** by the engine | §5.7 | 1.54, consumed by 1.50 and 1.57 |
-| The 100 ms tap and 2 s sync latency targets, measured | §18.1 | 1.63's offline check |
+| Super-scouting entry point sketched in prose | The `/super` route, the roster picker, the four-nulls rule and the **open-the-existing-one** behaviour, with its test file | Task 1.36 |
+| Client half of bare-match auto-creation missing entirely | `SelectRobotPage` is a number input, not a dropdown: an unknown match number is created through the outbox, offline, with the notice and the test | Task 1.8 |
+| Skeletons, not spinners | `Skeleton.tsx`, with a test that there is no spinner in it and that it respects `prefers-reduced-motion` | Task 1.17 |
+| The "update ready" hint never rendered | One muted footer line, **and no reload button** — there is nothing safe for that button to do mid-match | Task 1.8 |
+| Delta pull missing on screen entry and pull-to-refresh | Both wired to the same single `run(false)` path as every other trigger | Task 1.8 |
+| The "this event no longer exists" notice | Rendered, and it names the event | Task 1.8 |
+| Undo missing on multi-select and timer reset | Both through `useUndoable`; §8.2 names five repeatable inputs and now all five have it | Tasks 1.33, 1.34 |
+| Computed fields never recomputed at read time | `hydrateComputed`, called by every read path, so fixing an expression repairs history | Task 1.54 |
+| The 100 ms tap and 2 s sync targets unmeasured | Step 15 of the offline check, with both numbers recorded in the log | Task 1.63 |
+| Typed client half-built | `packages/shared/src/api` holds the schema map both sides import; `rpc.call` is typed per use case | Task 1.15 |
 
-### 4. The typed client is half-built
+**Practice mode's entry point** is the one §3 row still open: `practiceMode.enter()` exists and is tested, but no route or toggle calls it. It belongs in task 1.37 and is a few lines.
 
-`packages/shared` is declared as the home of every use-case schema (§16.1), and the registry imports from there. The **client** side still calls `rpc.call(name: string, input: unknown)` and casts the result. Closing it is one small task: a `typedRpc` whose keys come from the shared schema map, so a renamed field is a compile error in the page that reads it rather than `undefined` at a venue. It is worth doing before group C's admin pages multiply the call sites.
+**"All metrics for the team" in phase 1** is the other: task 1.57's `getTeamStats` says "all metrics" without saying which, since the metric builder is phase 2. Pin it when you build 1.57 — the honest phase-1 answer is the fixed ranking columns plus one row per scorable field.
 
 ---
 
